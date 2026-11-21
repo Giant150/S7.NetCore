@@ -1,17 +1,18 @@
 ﻿<#
 .SYNOPSIS
-  本地构建、打包并发布 S7.NetCore 到 NuGet。
+  本地构建、测试、校验、打包并发布 S7.NetCore 到 NuGet。
 
 .DESCRIPTION
-  与 GitHub Actions 极简发布一致：构建 -> 打包 -> 推送 -> 结论。构建成功即可发布；
-  不执行测试、不做版本格式/一致性校验、不预检、不重试、不补推。
+  步骤与 GitHub Actions 发布一致：Build -> Test(net10.0) -> Verify Output -> Pack -> Verify Package -> Push -> 结论。
+  仅 net10.0 执行全量测试；四框架产物与包内四框架资产必须通过校验。构建与测试成功即可发布；
+  不做版本格式/一致性校验、不预检、不重试、不补推。
 
 .EXAMPLE
   $env:NUGET_API_KEY = '<your-api-key>'
   pwsh -File tools/publish/publish-nuget.ps1
-  pwsh -File tools/publish/publish-nuget.ps1 -Version v2.0.1
+  pwsh -File tools/publish/publish-nuget.ps1 -Version v2.1.1
   pwsh -File tools/publish/publish-nuget.ps1 -PackOnly
-  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 2.0.0
+  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 2.1.0
 
 .NOTES
   版本：-Version 优先；否则读取 Directory.Build.props 的 VersionPrefix，仅去掉 v/V 前缀。
@@ -24,8 +25,9 @@ param([string]$Version, [switch]$SkipBuild, [switch]$PackOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$PackageId = 'S7.NetCore'; $NuGetSource = 'https://api.nuget.org/v3/index.json'
+$PackageId = 'SiemensS7.NetCore'; $NuGetSource = 'https://api.nuget.org/v3/index.json'
 $SolutionPath = 'S7.NetCore.sln'; $ProjectPath = 'src/S7.NetCore/S7.NetCore.csproj'; $PackagesDirectory = 'artifacts/packages'
+$VerifyScript = 'tools/build/verify-frameworks.ps1'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $script:failedStage = ''; $script:failReason = ''
 
@@ -45,7 +47,6 @@ function Invoke-External {
     return [pscustomobject]@{ ExitCode = $exitCode; Output = $output }
 }
 
-# 不得在此增加发布前检查（见 spec 5.7 D1~D22）
 function Resolve-Version {
     param([string]$RequestedVersion)
     $selected = ''; $source = ''
@@ -64,15 +65,36 @@ function Resolve-Version {
     return [pscustomobject]@{ Version = $selected; Source = $source }
 }
 
-# 不得在此增加发布前检查（见 spec 5.7 D1~D22）
 function Invoke-SolutionBuild {
     $result = Invoke-External -FilePath 'dotnet' -Arguments @('build', $SolutionPath, '-c', 'Release', '-p:ContinuousIntegrationBuild=true', '-p:DebugType=portable')
     Write-Host $result.Output
     if ($result.ExitCode -ne 0) { $script:failedStage = '构建'; $script:failReason = "dotnet build 退出码 $($result.ExitCode)"; Write-Host '[构建] 失败'; return $false }
-    Write-Host '[构建] 成功'; return $true
+    Write-Host '[构建] 成功：四框架全部通过'; return $true
 }
 
-# 不得在此增加发布前检查（见 spec 5.7 D1~D22）
+function Invoke-Net10Tests {
+    $result = Invoke-External -FilePath 'dotnet' -Arguments @('test', $SolutionPath, '-c', 'Release', '--no-build', '-f', 'net10.0')
+    Write-Host $result.Output
+    if ($result.ExitCode -ne 0) { $script:failedStage = '测试'; $script:failReason = "dotnet test 退出码 $($result.ExitCode)"; Write-Host '[测试] 失败'; return $false }
+    $statistics = @($result.Output -split "`r?`n" |
+        Where-Object { $_ -match '(Failed|失败)[:：]\s*\d+.*(Passed|通过)[:：]\s*\d+' } |
+        Select-Object -Last 1)
+    if ($statistics.Count -gt 0) { Write-Host "[测试] 成功：$($statistics[0].Trim())（框架 = net10.0）" }
+    else { Write-Host '[测试] 成功（框架 = net10.0）' }
+    return $true
+}
+
+function Invoke-Verification {
+    param([string]$Mode, [string]$PackagePath)
+    $scriptPath = Join-Path $RepositoryRoot $VerifyScript
+    if ([string]::IsNullOrWhiteSpace($PackagePath)) {
+        & $scriptPath -Mode $Mode -Configuration 'Release'
+    } else {
+        & $scriptPath -Mode $Mode -Configuration 'Release' -PackagePath $PackagePath
+    }
+    return $LASTEXITCODE
+}
+
 function Invoke-Pack {
     param([string]$PackageVersion)
     $outputDirectory = Join-Path $RepositoryRoot $PackagesDirectory
@@ -91,7 +113,6 @@ function Invoke-Pack {
     return [pscustomobject]@{ MainPackage = $mainPackage; SymbolPackage = $symbolPackage }
 }
 
-# 不得在此增加发布前检查（见 spec 5.7 D1~D22）
 function Invoke-NuGetPush {
     param([string]$MainPackage)
     $env:DOTNET_CLI_UI_LANGUAGE = 'en'
@@ -137,6 +158,10 @@ function Write-RunSummary {
     Write-Host "[结论] 主包：$mainFileName"
     Write-Host "[结论] 符号包：$symbolFileName（送达 $symbolText）"
     Write-Host "[结论] 推送源：$NuGetSource（结果 $pushText）"
+    if ([string]::IsNullOrWhiteSpace($script:failedStage)) {
+        Write-Host '[结论] 测试：net10.0 全量通过'
+        Write-Host '[结论] 校验：四框架构建产物与包资产通过'
+    }
     if (-not [string]::IsNullOrWhiteSpace($script:failedStage)) { Write-Host "[结论] 失败阶段：$($script:failedStage)"; Write-Host "[结论] 原因：$($script:failReason)" }
 }
 
@@ -152,7 +177,16 @@ try {
     if ($null -ne $versionInfo -and [string]::IsNullOrWhiteSpace($script:failedStage)) {
         if ($SkipBuild) { Write-Host '[构建] 已跳过（复用既有构建产物）' } else { $null = Invoke-SolutionBuild }
     }
+    if ($null -ne $versionInfo -and [string]::IsNullOrWhiteSpace($script:failedStage)) { $null = Invoke-Net10Tests }
+    if ($null -ne $versionInfo -and [string]::IsNullOrWhiteSpace($script:failedStage)) {
+        $verifyExitCode = Invoke-Verification -Mode 'Output'
+        if ($verifyExitCode -ne 0) { $script:failedStage = '产物校验'; $script:failReason = "verify-frameworks.ps1 退出码 $verifyExitCode"; Write-Host '[校验] 失败：构建产物' }
+    }
     if ($null -ne $versionInfo -and [string]::IsNullOrWhiteSpace($script:failedStage)) { $packInfo = Invoke-Pack -PackageVersion $versionInfo.Version }
+    if ($null -ne $packInfo -and [string]::IsNullOrWhiteSpace($script:failedStage)) {
+        $verifyExitCode = Invoke-Verification -Mode 'Package' -PackagePath $packInfo.MainPackage
+        if ($verifyExitCode -ne 0) { $script:failedStage = '包校验'; $script:failReason = "verify-frameworks.ps1 退出码 $verifyExitCode"; Write-Host '[校验] 失败：包资产' }
+    }
     if ($null -ne $packInfo -and -not $PackOnly -and [string]::IsNullOrWhiteSpace($script:failedStage)) { $pushResult = Invoke-NuGetPush -MainPackage $packInfo.MainPackage }
 } finally { Pop-Location }
 

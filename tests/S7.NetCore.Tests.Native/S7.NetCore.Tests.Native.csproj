@@ -1,7 +1,7 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFramework>$(S7TestTargetFramework)</TargetFramework>
     <AssemblyName>S7.NetCore.Tests.Native</AssemblyName>
     <RootNamespace>S7.NetCore.Tests.Native</RootNamespace>
     <IsPackable>false</IsPackable>

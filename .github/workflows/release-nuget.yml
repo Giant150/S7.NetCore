@@ -16,6 +16,10 @@ permissions:
 env:
   NUGET_SOURCE: https://api.nuget.org/v3/index.json
 
+# 本地实测耗时（2026-11-21，Windows / .NET SDK 11.0.100）：
+# Build 增量约 8s（首次含还原约 2m45s）；Test(net10.0) 约 12s；Verify Frameworks <1s；Pack 约 2s；Verify Package <1s。
+# 步骤超时预算：Build 12m、Test 12m、Verify 2m、Pack 4m、Verify Package 1m，job 总预算 30m。
+
 concurrency:
   group: nuget-release
   cancel-in-progress: false
@@ -24,7 +28,7 @@ jobs:
   release:
     name: Release
     runs-on: windows-latest
-    timeout-minutes: 10
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -37,6 +41,24 @@ jobs:
         uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+
+      - name: Install .NET 10 runtime
+        shell: pwsh
+        run: |
+          $installScript = Join-Path $env:RUNNER_TEMP 'dotnet-install.ps1'
+          Invoke-WebRequest -Uri 'https://dot.net/v1/dotnet-install.ps1' -OutFile $installScript
+          $installDirectory = if ([string]::IsNullOrWhiteSpace($env:DOTNET_ROOT)) { 'C:\Program Files\dotnet' } else { $env:DOTNET_ROOT }
+          & $installScript -Runtime dotnet -Channel 10.0 -InstallDir $installDirectory -NoPath
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '[运行时] 失败：.NET 10 runtime 安装失败'
+            exit $LASTEXITCODE
+          }
+          $runtime = dotnet --list-runtimes | Select-String 'Microsoft.NETCore.App 10\.'
+          if (-not $runtime) {
+            Write-Output '[运行时] 失败：未检测到 .NET 10 runtime'
+            exit 1
+          }
+          Write-Output "[运行时] 成功：$runtime"
 
       - name: Resolve version
         id: version
@@ -74,18 +96,60 @@ jobs:
           Write-Output "[版本] 成功：$selected（来源 $source）"
 
       - name: Build
-        timeout-minutes: 6
+        id: build
+        timeout-minutes: 12
         shell: pwsh
         run: |
-          dotnet build S7.NetCore.sln -c Release -p:ContinuousIntegrationBuild=true -p:DebugType=portable
+          $buildLog = Join-Path $env:RUNNER_TEMP 'dotnet-build-net8-net11.log'
+          dotnet build S7.NetCore.sln -c Release -p:ContinuousIntegrationBuild=true -p:DebugType=portable 2>&1 | Tee-Object -FilePath $buildLog
           if ($LASTEXITCODE -ne 0) {
             Write-Output '[构建] 失败'
             exit $LASTEXITCODE
           }
-          Write-Output '[构建] 成功'
+          $tfmLines = @(Get-Content -LiteralPath $buildLog | Where-Object { $_ -match '\[TFM\] .* BUILD=PASS' })
+          if ($tfmLines.Count -ne 4) {
+            Write-Output "[构建] 失败：逐框架构建结论数量为 $($tfmLines.Count)，期望 4"
+            exit 1
+          }
+          $delimiter = 'S7_TFM_EOF'
+          "tfms<<$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          $tfmLines | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "$delimiter" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Output '[构建] 成功：四框架全部通过'
+
+      - name: Test (net10.0)
+        id: test
+        timeout-minutes: 12
+        shell: pwsh
+        env:
+          DOTNET_CLI_UI_LANGUAGE: en
+        run: |
+          $testLog = Join-Path $env:RUNNER_TEMP 'dotnet-test-net10.log'
+          dotnet test S7.NetCore.sln -c Release --no-build -f net10.0 2>&1 | Tee-Object -FilePath $testLog
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '[测试] 失败'
+            exit $LASTEXITCODE
+          }
+          $statistics = @(Get-Content -LiteralPath $testLog | Where-Object { $_ -match 'Failed:\s*\d+,\s*Passed:\s*\d+,\s*Skipped:\s*\d+' })
+          if ($statistics.Count -gt 0) {
+            "test_summary=$($statistics[-1].Trim())" >> $env:GITHUB_OUTPUT
+          } else {
+            'test_summary=Passed（统计行未解析）' >> $env:GITHUB_OUTPUT
+          }
+          Write-Output '[测试] 成功：net10.0 全量通过'
+
+      - name: Verify Frameworks
+        timeout-minutes: 2
+        shell: pwsh
+        run: |
+          pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '[校验] 失败：构建产物'
+            exit $LASTEXITCODE
+          }
 
       - name: Pack
-        timeout-minutes: 2
+        timeout-minutes: 4
         shell: pwsh
         run: |
           dotnet pack src/S7.NetCore/S7.NetCore.csproj -c Release --no-build -o artifacts/packages -p:PackageVersion=$env:RELEASE_VERSION -p:IncludeSymbols=true -p:SymbolPackageFormat=snupkg
@@ -93,16 +157,26 @@ jobs:
             Write-Output '[打包] 失败'
             exit $LASTEXITCODE
           }
-          $mainPackage = Join-Path 'artifacts/packages' "S7.NetCore.$env:RELEASE_VERSION.nupkg"
+          $mainPackage = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
           if (-not (Test-Path -LiteralPath $mainPackage)) {
             Write-Output '[打包] 失败：未产出主包文件'
             exit 1
           }
-          $symbolPackage = Join-Path 'artifacts/packages' "S7.NetCore.$env:RELEASE_VERSION.snupkg"
+          $symbolPackage = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.snupkg"
           if (Test-Path -LiteralPath $symbolPackage) {
             Write-Output '[打包] 成功：主包与符号包已产出'
           } else {
             Write-Output '[打包] 成功：仅主包（符号包未产出，不阻断发布）'
+          }
+
+      - name: Verify Package
+        timeout-minutes: 1
+        shell: pwsh
+        run: |
+          pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath "artifacts/packages/SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
+          if ($LASTEXITCODE -ne 0) {
+            Write-Output '[校验] 失败：包资产'
+            exit $LASTEXITCODE
           }
 
       - name: Push
@@ -118,7 +192,7 @@ jobs:
             exit 1
           }
           Write-Output '[推送] 凭证：已配置'
-          $packagePath = Join-Path 'artifacts/packages' "S7.NetCore.$env:RELEASE_VERSION.nupkg"
+          $packagePath = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
           $pushOutput = & dotnet nuget push $packagePath --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate 2>&1 | Out-String
           $exitCode = $LASTEXITCODE
           Write-Output $pushOutput
@@ -183,19 +257,29 @@ jobs:
           VERSION_SOURCE: ${{ steps.version.outputs.source }}
           PUSH_OUTCOME: ${{ steps.push.outputs.outcome }}
           SYMBOL_STATUS: ${{ steps.push.outputs.symbol_status }}
+          TFM_CONCLUSIONS: ${{ steps.build.outputs.tfms }}
+          TEST_SUMMARY: ${{ steps.test.outputs.test_summary }}
         run: |
           $version = if ([string]::IsNullOrWhiteSpace($env:VERSION)) { 'Unknown' } else { $env:VERSION }
           $source = if ([string]::IsNullOrWhiteSpace($env:VERSION_SOURCE)) { 'Unknown' } else { $env:VERSION_SOURCE }
           $outcome = if ([string]::IsNullOrWhiteSpace($env:PUSH_OUTCOME)) { 'Failed' } else { $env:PUSH_OUTCOME }
           $symbolStatus = if ([string]::IsNullOrWhiteSpace($env:SYMBOL_STATUS)) { 'Unknown' } else { $env:SYMBOL_STATUS }
+          $tfmConclusions = if ([string]::IsNullOrWhiteSpace($env:TFM_CONCLUSIONS)) { '未取得构建结论' } else { $env:TFM_CONCLUSIONS }
+          $testSummary = if ([string]::IsNullOrWhiteSpace($env:TEST_SUMMARY)) { '未取得测试结论' } else { $env:TEST_SUMMARY }
           $lines = @(
             '## NuGet 发布结论'
             "- 运行结论：$outcome"
             "- 版本号：$version（来源：$source）"
-            '- 包标识：S7.NetCore'
-            "- 主包：S7.NetCore.$version.nupkg"
-            "- 符号包：S7.NetCore.$version.snupkg（送达：$symbolStatus）"
+            '- 包标识：SiemensS7.NetCore'
+            "- 主包：SiemensS7.NetCore.$version.nupkg"
+            "- 符号包：SiemensS7.NetCore.$version.snupkg（送达：$symbolStatus）"
             "- 推送源：$env:NUGET_SOURCE（结果：$outcome）"
+            ''
+            '## 四框架构建结论'
+            $tfmConclusions
+            ''
+            '## net10.0 测试结论'
+            "- $testSummary"
           )
           if (-not [string]::IsNullOrWhiteSpace($env:GITHUB_STEP_SUMMARY)) {
             $lines | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append

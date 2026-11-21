@@ -1,7 +1,9 @@
 <Project>
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
-    <VersionPrefix>2.0.0</VersionPrefix>
+    <S7TargetFrameworks>net8.0;net9.0;net10.0;net11.0</S7TargetFrameworks>
+    <S7TestTargetFramework>net10.0</S7TestTargetFramework>
+    <S7MinimumTargetFramework>net8.0</S7MinimumTargetFramework>
+    <VersionPrefix>2.1.0</VersionPrefix>
     <LangVersion>latest</LangVersion>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
@@ -12,4 +14,12 @@
     <Deterministic>true</Deterministic>
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <Target Name="ReportFrameworkBuild" AfterTargets="Build" Condition="'$(MSBuildProjectName)' == 'S7.NetCore' and '$(TargetFramework)' != ''">
+    <PropertyGroup>
+      <S7BuildVerificationMode Condition="'$(TargetFramework)' == '$(S7TestTargetFramework)'">完整测试验证</S7BuildVerificationMode>
+      <S7BuildVerificationMode Condition="'$(S7BuildVerificationMode)' == ''">仅构建验证</S7BuildVerificationMode>
+    </PropertyGroup>
+    <Message Importance="High" Text="[TFM] $(TargetFramework) BUILD=PASS MODE=$(S7BuildVerificationMode)" />
+  </Target>
 </Project>

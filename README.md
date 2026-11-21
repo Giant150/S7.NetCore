@@ -1,6 +1,17 @@
 # S7.NetCore
 
-基于 .NET 10 的西门子 S7 PLC 通讯组件，全托管实现。提供会话管理、原始字节读写，以及按 `DB1.DBW0` 等地址表达式进行十一种数据类型的类型化读写。
+基于 .NET 8 / 9 / 10 / 11 的西门子 S7 PLC 通讯组件，全托管实现。提供会话管理、原始字节读写，以及按 `DB1.DBW0` 等地址表达式进行十一种数据类型的类型化读写。
+
+## 目标框架支持矩阵
+
+| 目标框架 | 可用状态 | 验证方式 | 依赖主版本 | 最低使用方框架 | 说明 |
+|----------|---------|---------|-----------|---------------|------|
+| net8.0 | 支持 | 仅构建验证 | 8 | net8.0 | 最低支持框架；net7.0 及以下不受支持 |
+| net9.0 | 支持 | 仅构建验证 | 9 | net9.0 | 与其它框架共享同一份源码 |
+| net10.0 | 支持 | 完整测试验证 | 10 | net10.0 | 测试基准框架；全量用例在此执行 |
+| net11.0 | 支持 | 仅构建验证 | 11（共享框架内置） | net11.0 | 基于 GA 版本，不承诺预览版 |
+
+四个框架在单个 NuGet 包内均包含完整资产，由使用方按目标框架自动选择；仅构建验证不代表能力差异，仅表示测试执行范围。
 
 ## 本期范围
 
@@ -248,13 +259,21 @@ var tracedOptions = options with { EnableProtocolTrace = true };
 ## 构建与测试
 
 ```bash
+# 四框架构建（net8.0 / net9.0 / net10.0 / net11.0）
 dotnet build S7.NetCore.sln -c Release
-dotnet test S7.NetCore.sln -c Release
 
-dotnet build src/S7.NetCore/S7.NetCore.csproj -c Release -r win-x64 --no-self-contained
-dotnet build src/S7.NetCore/S7.NetCore.csproj -c Release -r linux-x64 --no-self-contained
-dotnet build tests/S7.NetCore.Tests.Native/S7.NetCore.Tests.Native.csproj -c Release -r linux-x64 --no-self-contained
-dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -r linux-x64 --no-self-contained
+# 仅 net10.0 执行全量测试；其它框架只构建不测试
+dotnet test S7.NetCore.sln -c Release --no-build -f net10.0
+
+# 单框架 RID 交叉构建示例
+dotnet build src/S7.NetCore/S7.NetCore.csproj -c Release -f net10.0 -r win-x64 --no-self-contained
+dotnet build src/S7.NetCore/S7.NetCore.csproj -c Release -f net10.0 -r linux-x64 --no-self-contained
+dotnet build tests/S7.NetCore.Tests.Native/S7.NetCore.Tests.Native.csproj -c Release -f net10.0 -r linux-x64 --no-self-contained
+dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.0 -r linux-x64 --no-self-contained
+
+# 校验四框架产物与 NuGet 包
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.2.1.0.nupkg
 ```
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
@@ -295,6 +314,8 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 项目 | 结果 |
 |------|------|
+| 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
+| net10.0 全量测试 | 330 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
 | 全量测试 | 330 项全部通过（Debug / Release） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
@@ -331,4 +352,5 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0 |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |

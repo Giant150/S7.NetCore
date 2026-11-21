@@ -53,7 +53,7 @@ $migrationIndex = $readme.IndexOf('## 变更记录与迁移')
 Check 'N-13b' ($migrationIndex -gt 0 -and -not $readme.Substring(0, $migrationIndex).Contains('Snap7.NetCore')) 'README 白名单外存在旧名'
 
 $props = Get-Content -Raw -LiteralPath (Join-Path $root 'Directory.Build.props')
-Check 'N-15' ($props.Contains('<VersionPrefix>2.0.0</VersionPrefix>')) '版本声明缺失或不是 2.0.0'
+Check 'N-15' ($props.Contains('<VersionPrefix>2.1.0</VersionPrefix>')) '版本声明缺失或不是 2.1.0'
 
 $outputDir = Join-Path $root 'src/S7.NetCore/bin/Debug/net10.0'
 Check 'N-12' ((Test-Path (Join-Path $outputDir 'S7.NetCore.dll')) -or -not (Test-Path $outputDir)) 'Debug 输出缺少 S7.NetCore.dll'
