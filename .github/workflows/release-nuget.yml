@@ -1,0 +1,381 @@
+name: Release to NuGet
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag to publish (for example v2.0.0)'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  DOTNET_NOLOGO: 'true'
+  DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+
+jobs:
+  preflight:
+    name: Preflight
+    runs-on: windows-latest
+    timeout-minutes: 10
+    outputs:
+      outcome: ${{ steps.version.outputs.outcome }}
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+      symbol_mode: ${{ steps.symbol.outputs.symbol_mode }}
+      symbol_evidence: ${{ steps.symbol.outputs.symbol_evidence }}
+      main_exists: ${{ steps.exists.outputs.exists }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.event.release.tag_name }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Resolve release version
+        id: version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          EVENT_ACTION: ${{ github.event.action }}
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          RELEASE_PRERELEASE: ${{ github.event.release.prerelease }}
+          RELEASE_DRAFT: ${{ github.event.release.draft }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          $tag = if ($env:EVENT_NAME -eq 'workflow_dispatch') { $env:INPUT_TAG } else { $env:RELEASE_TAG }
+          & ./tools/release/Resolve-ReleaseVersion.ps1 `
+            -EventName $env:EVENT_NAME `
+            -EventAction $env:EVENT_ACTION `
+            -Tag $tag `
+            -IsPrerelease $env:RELEASE_PRERELEASE `
+            -IsDraft $env:RELEASE_DRAFT
+
+      - name: Resolve symbol delivery mode
+        id: symbol
+        if: steps.version.outputs.outcome == 'proceed'
+        shell: pwsh
+        env:
+          SYMBOL_OVERRIDE: ${{ vars.S7_SYMBOL_DELIVERY_MODE }}
+        run: |
+          & ./tools/release/Resolve-SymbolDeliveryMode.ps1 -Override $env:SYMBOL_OVERRIDE -StatePath artifacts/release/state.json
+
+      - name: Check existing package version
+        id: exists
+        if: steps.version.outputs.outcome == 'proceed' && steps.symbol.outputs.symbol_mode != ''
+        shell: pwsh
+        run: |
+          & ./tools/release/Test-NuGetPackageExists.ps1 `
+            -Version '${{ steps.version.outputs.version }}' `
+            -Phase 'Preflight' `
+            -StatePath artifacts/release/state.json
+
+      - name: Write run summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath artifacts/release/state.json) {
+            & ./tools/release/Write-RunSummary.ps1 -StatePath artifacts/release/state.json
+          } else {
+            Write-Output 'No release state was produced by preflight.'
+          }
+
+      - name: Upload release state
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-state
+          path: artifacts/release/state.json
+          if-no-files-found: warn
+
+  publish:
+    name: Publish
+    needs: preflight
+    if: needs.preflight.outputs.outcome == 'proceed'
+    runs-on: windows-latest
+    timeout-minutes: 15
+    concurrency:
+      group: nuget-release-${{ needs.preflight.outputs.version }}
+      cancel-in-progress: false
+    env:
+      RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+      RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+      SYMBOL_MODE: ${{ needs.preflight.outputs.symbol_mode }}
+      MAIN_EXISTS: ${{ needs.preflight.outputs.main_exists }}
+    steps:
+      - name: Checkout release tag
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.preflight.outputs.tag }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Download release state
+        uses: actions/download-artifact@v4
+        with:
+          name: release-state
+          path: artifacts/release
+
+      - name: Evaluate skip conditions
+        id: gate
+        shell: pwsh
+        run: |
+          $skipBuild = ($env:MAIN_EXISTS -eq 'true' -and $env:SYMBOL_MODE -eq 'auto')
+          "skip_build=$($skipBuild.ToString().ToLowerInvariant())" >> $env:GITHUB_OUTPUT
+          if ($skipBuild) {
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            $now = (Get-Date).ToUniversalTime().ToString('o')
+            $state = Read-ReleaseState -StatePath artifacts/release/state.json
+            $state.MainPush = [pscustomobject]@{
+              Target         = 'Main'
+              Outcome        = 'AlreadyExists'
+              Attempts       = @()
+              CompletedAtUtc = $now
+              Note           = '版本已存在，未重复推送'
+            }
+            $state.SymbolPush = [pscustomobject]@{
+              Target         = 'Symbol'
+              Outcome        = 'Skipped'
+              Attempts       = @()
+              CompletedAtUtc = $now
+              Note           = '符号随主包分发'
+            }
+            $state.CompletedAtUtc = $now
+            Add-ReleaseStage -State $state -StageName 'PushSkipped'
+            Write-ReleaseState -State $state -StatePath artifacts/release/state.json
+            Write-Output "Version $env:RELEASE_VERSION already exists; skipping build, test, pack and push."
+          }
+
+      - name: Restore dependencies
+        if: steps.gate.outputs.skip_build != 'true'
+        timeout-minutes: 3
+        shell: pwsh
+        run: |
+          dotnet restore S7.NetCore.sln
+          if ($LASTEXITCODE -ne 0) {
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'RESTORE_FAILED' -Message 'dotnet restore failed' | Out-Null
+            exit 10
+          }
+
+      - name: Build
+        id: build
+        if: steps.gate.outputs.skip_build != 'true'
+        timeout-minutes: 4
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Path artifacts/release -Force | Out-Null
+          $debugType = if ($env:SYMBOL_MODE -eq 'manual') { 'portable' } else { 'embedded' }
+          & dotnet build S7.NetCore.sln -c Release --no-restore -warnaserror `
+            -p:ContinuousIntegrationBuild=true "-p:DebugType=$debugType" 2>&1 |
+            Tee-Object -FilePath artifacts/release/build.log
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Handle build failure
+        if: steps.gate.outputs.skip_build != 'true' && steps.build.outcome == 'failure'
+        shell: pwsh
+        run: |
+          Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+          Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'BUILD_FAILED' -Message 'dotnet build failed or timed out' | Out-Null
+          exit 11
+
+      - name: Test
+        id: test
+        if: steps.gate.outputs.skip_build != 'true' && steps.build.outcome == 'success'
+        timeout-minutes: 3
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          dotnet test S7.NetCore.sln -c Release --no-build --logger trx --results-directory artifacts/test-results
+          if ($LASTEXITCODE -ne 0) {
+            exit $LASTEXITCODE
+          }
+
+      - name: Handle test failure
+        if: steps.gate.outputs.skip_build != 'true' && steps.build.outcome == 'success' && steps.test.outcome == 'failure'
+        shell: pwsh
+        run: |
+          $hasTrx = @(Get-ChildItem -LiteralPath artifacts/test-results -Filter '*.trx' -File -ErrorAction SilentlyContinue).Count -gt 0
+          if ($hasTrx) {
+            $pwshPath = (Get-Command pwsh).Source
+            $arguments = @(
+              '-NoProfile'
+              '-File'
+              'tools/release/Read-TestResults.ps1'
+              '-ResultsDirectory'
+              'artifacts/test-results'
+              '-StatePath'
+              'artifacts/release/state.json'
+            )
+            $process = Start-Process -FilePath $pwshPath -ArgumentList $arguments -Wait -PassThru -NoNewWindow
+            if ($process.ExitCode -eq 12) {
+              exit 12
+            }
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'TEST_FAILED' -Message 'dotnet test reported failures' | Out-Null
+            exit 12
+          }
+          Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+          Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'TEST_TIMEOUT' -Message 'dotnet test did not produce TRX results' | Out-Null
+          exit 13
+
+      - name: Validate build artifacts
+        id: artifacts
+        if: steps.gate.outputs.skip_build != 'true' && steps.build.outcome == 'success' && steps.test.outcome == 'success'
+        shell: pwsh
+        run: |
+          & ./tools/release/Test-BuildArtifacts.ps1 `
+            -Configuration Release `
+            -TargetFramework net10.0 `
+            -StatePath artifacts/release/state.json `
+            -BuildLogPath artifacts/release/build.log
+
+      - name: Validate test results
+        id: tests
+        if: steps.gate.outputs.skip_build != 'true' && steps.artifacts.outcome == 'success'
+        shell: pwsh
+        run: |
+          & ./tools/release/Read-TestResults.ps1 -ResultsDirectory artifacts/test-results -StatePath artifacts/release/state.json
+
+      - name: Pack
+        id: pack
+        if: steps.gate.outputs.skip_build != 'true' && steps.tests.outcome == 'success'
+        shell: pwsh
+        run: |
+          $packageArguments = @(
+            'pack'
+            'src/S7.NetCore/S7.NetCore.csproj'
+            '-c'
+            'Release'
+            '--no-build'
+            '-o'
+            'artifacts/packages'
+            "-p:PackageVersion=$env:RELEASE_VERSION"
+            '-p:ContinuousIntegrationBuild=true'
+          )
+          if ($env:SYMBOL_MODE -eq 'manual') {
+            $packageArguments += '-p:IncludeSymbols=true'
+            $packageArguments += '-p:SymbolPackageFormat=snupkg'
+          }
+          & dotnet @packageArguments
+          if ($LASTEXITCODE -ne 0) {
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'PACK_FAILED' -Message 'dotnet pack failed' | Out-Null
+            exit 15
+          }
+
+          $mainPackages = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.nupkg' })
+          if ($mainPackages.Count -eq 0) {
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'PACK_FAILED' -Message 'pack output contains no nupkg' | Out-Null
+            exit 15
+          }
+
+          $symbolPackages = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.snupkg' })
+          if ($env:SYMBOL_MODE -eq 'manual') {
+            if ($symbolPackages.Count -eq 0) {
+              Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+              Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'SYMBOL_PACK_FAILED' -Message 'manual mode requires a snupkg' | Out-Null
+              exit 18
+            }
+          } elseif ($symbolPackages.Count -gt 0) {
+            Remove-Item -LiteralPath $symbolPackages.FullName -Force
+            Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+            Write-ReleaseFailure -StatePath artifacts/release/state.json -Code 'PACK_FAILED' -Message 'auto mode must not produce snupkg' | Out-Null
+            exit 15
+          }
+
+      - name: Validate package content
+        id: package_content
+        if: steps.pack.outcome == 'success'
+        shell: pwsh
+        run: |
+          Import-Module ./tools/release/ReleasePolicy.psm1 -Force
+          $mainPackage = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.nupkg' } | Select-Object -First 1)
+          $arguments = @(
+            '-PackagePath'
+            $mainPackage.FullName
+            '-ExpectedId'
+            $ReleasePolicyConstants.PackageId
+            '-ExpectedVersion'
+            $env:RELEASE_VERSION
+            '-TargetFramework'
+            $ReleasePolicyConstants.PackageTargetFramework
+            '-SymbolMode'
+            $env:SYMBOL_MODE
+            '-StatePath'
+            'artifacts/release/state.json'
+          )
+          if ($env:SYMBOL_MODE -eq 'manual') {
+            $symbolPackage = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.snupkg' } | Select-Object -First 1)
+            $arguments += '-SymbolPackagePath'
+            $arguments += $symbolPackage.FullName
+          }
+          & ./tools/release/Test-PackageContent.ps1 @arguments
+
+      - name: Publish to NuGet
+        id: publish
+        if: steps.package_content.outcome == 'success'
+        shell: pwsh
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          $mainPackage = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.nupkg' } | Select-Object -First 1)
+          $arguments = @(
+            '-PackagePath'
+            $mainPackage.FullName
+            '-SymbolMode'
+            $env:SYMBOL_MODE
+            '-Version'
+            $env:RELEASE_VERSION
+            '-StatePath'
+            'artifacts/release/state.json'
+          )
+          if ($env:SYMBOL_MODE -eq 'manual') {
+            $symbolPackage = @(Get-ChildItem -LiteralPath artifacts/packages -File | Where-Object { $_.Extension -eq '.snupkg' } | Select-Object -First 1)
+            $arguments += '-SymbolPackagePath'
+            $arguments += $symbolPackage.FullName
+          }
+          & ./tools/release/Publish-NuGetPackage.ps1 @arguments
+
+      - name: Write run summary
+        if: always()
+        shell: pwsh
+        run: |
+          if (Test-Path -LiteralPath artifacts/release/state.json) {
+            & ./tools/release/Write-RunSummary.ps1 -StatePath artifacts/release/state.json
+          } else {
+            Write-Output 'No release state was produced by publish.'
+          }
+
+      - name: Upload diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nuget-release-diagnostics
+          path: |
+            artifacts/release/state.json
+            artifacts/release/build.log
+            artifacts/packages/*.nupkg
+            artifacts/packages/*.snupkg
+            artifacts/test-results/*.trx
+          if-no-files-found: warn
+          retention-days: 14
