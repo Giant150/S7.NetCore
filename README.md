@@ -1,6 +1,6 @@
 # S7.NetCore
 
-基于 .NET 8 / 9 / 10 / 11 的西门子 S7 PLC 通讯组件，全托管实现。提供会话管理、原始字节读写，以及按 `DB1.DBW0` 等地址表达式进行十一种数据类型的类型化读写。
+基于 .NET 8 / 9 / 10 / 11 的西门子 S7 PLC 通讯组件，全托管实现。提供会话管理、原始字节读写、十一种数据类型的类型化读写，以及扁平 C# 结构体读写。
 
 ## 目标框架支持矩阵
 
@@ -25,6 +25,7 @@
 - 地址表达式解析：`DB1.DBW0`、`DB1.DBB0`、`DB1.DBD0`、`DB1.DBX0.3`、`MW10`、`Q0.3` 等
 - 十一种类型转换：Bool、Byte、Word、Int、DWord、DInt、Real、LReal、String、S7String、S7WString
 - 类型化读写与单请求位写（只改变目标位，1 次往返）
+- 扁平结构体读写：公共实例字段按声明顺序连续映射，支持数值与带容量标注的字符串字段
 - 统一错误模型（六类错误 + 稳定错误码 + PLC 原始返回码）
 - 结构化诊断日志、可选帧级协议跟踪、日志失败隔离
 - 断线自动重连（默认关闭；连接类故障触发，含退避、请求等待与结果恢复元数据）
@@ -32,7 +33,7 @@
 
 **明确不做**
 
-- DateTime、Struct/UDT、数组与嵌套类型
+- DateTime、嵌套结构体/UDT、数组与嵌套类型
 - 符号寻址与变量表导入
 - 一次请求中的多变量批量读写
 - Timer / Counter 区域
@@ -138,7 +139,7 @@ S7TypedReadResult text = await client.ReadValueAsync(
 | `S7String` | `string` | `Capacity + 2` | `B` | ASCII；首字节容量、第二字节长度 |
 | `S7WString` | `string` | `4 + 2 × Capacity` | `B` | UTF-16BE；2 字节容量 + 2 字节长度（码元）；容量 1～16383；无终止符/BOM |
 
-不支持：DateTime、Struct/UDT、数组与符号寻址。
+不支持：DateTime、嵌套结构体/UDT、数组与符号寻址；扁平结构体请使用下方的结构体读写。
 
 ### 地址表达式
 
@@ -230,6 +231,55 @@ catch (S7ClientException ex)
 - 已连接时重复连接返回 `SessionAlreadyConnected`
 - `DisconnectAsync` 幂等；`Faulted` 状态下读写返回 `SessionFaulted`，需显式断开后重连
 - 默认不自动重连；启用 `Reconnect` 后按策略恢复。重连期间读写等待窗口到期返回 `SessionReconnecting`(204)，重连耗尽返回 `ReconnectExhausted`(604)，被显式断开或客户端释放中止返回 `ReconnectAborted`(605)
+
+## 结构体读写
+
+结构体读写只映射公共实例字段，按声明顺序连续排布，不使用运行时对齐填充。字段类型限定为九种；`bool` 固定占 1 字节（读回非零即真）。
+
+```csharp
+public struct MotorData
+{
+    public bool Running;
+    public short Speed;
+    public int Counter;
+
+    [S7StringField(16)]
+    public string Name;
+
+    [S7StringField(8, DataType = S7DataType.S7WString)]
+    public string Label;
+}
+
+S7StructReadResult<MotorData> read = await client.ReadStructAsync<MotorData>("DB2.DBB0");
+await client.WriteStructAsync("DB2.DBB0", new MotorData
+{
+    Running = true,
+    Speed = 1500,
+    Counter = 42,
+    Name = "MAIN",
+    Label = "主电机"
+});
+```
+
+| C# 字段 | PLC 类型 | 占用字节 |
+|---------|---------|---------|
+| `bool` | `Bool` | 1（整字节，非零即真） |
+| `byte` | `Byte` | 1 |
+| `short` | `Int` | 2 |
+| `ushort` | `Word` | 2 |
+| `int` | `DInt` | 4 |
+| `uint` | `DWord` | 4 |
+| `float` | `Real` | 4 |
+| `double` | `LReal` | 8 |
+| `string` | `String` / `S7String` / `S7WString` | 容量 / 容量+2 / 4+2×容量 |
+
+- 字符串字段必须使用 `[S7StringField(capacity)]`；默认编码 `S7String`，也可指定 `String` 或 `S7WString`。容量单位与单值类型化读写一致。
+- 地址仅接受 `DBn.DBBm`；不支持的地址返回 `StructAddressNotSupported`(140)，区间越界返回 `AddressOutOfRange`(137)。
+- 类型约束为 `where T : struct` + 运行时纯度检查：无引用等价 `unmanaged`；仅允许 `string` 引用字段，其他引用/嵌套/数组/枚举/`DateTime`/`decimal`/可空返回 `DataTypeNotSupported`(132)。该取舍用于同时支持 `string` 字段（字面 `unmanaged` 约束会禁止 `string`）。
+- 布局非法返回 `StructLayoutInvalid`(139)：空布局、重复/错位标注、容量越界、总长越界、`LayoutKind.Explicit` 或 `FieldOffset`。
+- `[StructLayout(LayoutKind.Sequential/Auto, Pack=...)]` 允许存在，但不参与偏移与长度计算；`LayoutKind.Explicit` 被拒绝。
+- 读取整段一次请求（分包由会话层完成），全有或全无；写入先完成全部字段校验与编码，失败零发送。重连与写入进度语义与字节读写一致。
+- 日志只记录类型名、映射字段数、地址、长度、错误码，不记录任何字段值。
 
 ## 断线自动重连
 
@@ -357,12 +407,13 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 340 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| net10.0 全量测试 | 362 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
 | 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| 全量测试 | 340 项全部通过（Release / net10.0） |
+| 全量测试 | 362 项全部通过（Release / net10.0） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
-| VirtualPlc 用例 | 65/65 通过（55 项迁移 + 10 项新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
+| VirtualPlc 用例 | 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | 关闭/无库跳过语义 | `SERVER=off` 与无效库路径：59 项跳过、6 项通过、0 失败 |
 | 嵌入式实测基线 | PDU=480；R=462；W=445；启动 35.6ms；6 个区域 × 65535 字节 |
 | 生命周期与数据 | 3 轮停止/重启成功、端口可重绑；停止幂等；区域首字节均为 `0x0B` 且重启后一致 |
@@ -384,7 +435,7 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 ## 后续扩展点
 
-- DateTime、Struct/UDT、数组与嵌套类型
+- DateTime、嵌套结构体/UDT、数组与嵌套类型
 - 符号寻址与变量表导入
 - 多变量打包读写
 - Timer / Counter 区域
@@ -395,5 +446,5 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据） |
+| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140） |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |

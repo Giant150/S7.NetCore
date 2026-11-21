@@ -97,6 +97,12 @@ public readonly record struct S7LogEntry
 
     /// <summary>从断线到重连成功或耗尽的持续时长；非重连条目为 <see langword="null"/>。</summary>
     public TimeSpan? DisconnectedDuration { get; init; }
+
+    /// <summary>结构体类型名；仅结构体读写条目填充。</summary>
+    public string? StructTypeName { get; init; }
+
+    /// <summary>结构体映射字段数；仅结构体读写条目填充。</summary>
+    public int? MappedFieldCount { get; init; }
 }
 
 /// <summary>

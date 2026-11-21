@@ -285,5 +285,17 @@ public enum S7ErrorCode
     /// S7WString 字符数据非法（孤立代理项、末尾不完整代理、字符区不足等）。
     /// 类别 Protocol，阶段 Read；不复用 406/407。
     /// </summary>
-    InvalidS7WStringData = 409
+    InvalidS7WStringData = 409,
+
+    /// <summary>
+    /// 结构体布局非法（空布局、字段标注位置或数量非法、容量越界、总长越界、显式偏移等）。
+    /// 类别 InvalidArgument，阶段 Validate。
+    /// </summary>
+    StructLayoutInvalid = 139,
+
+    /// <summary>
+    /// 结构体地址不受支持（非 DB 区、非 DBB 宽度、带位号或 DB 号小于 1）。
+    /// 类别 InvalidArgument，阶段 Validate。
+    /// </summary>
+    StructAddressNotSupported = 140
 }
