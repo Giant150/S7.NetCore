@@ -8,7 +8,7 @@ namespace S7.NetCore.Internal;
 internal static class OptionsValidator
 {
     /// <summary>
-    /// 校验连接参数。
+    /// 校验连接参数与重连策略。
     /// </summary>
     /// <param name="options">连接参数。</param>
     /// <exception cref="S7ClientException">参数非法时抛出。</exception>
@@ -54,6 +54,58 @@ internal static class OptionsValidator
         {
             throw Invalid(S7ErrorCode.InvalidLength, $"MaxQueuedRequests 必须在 1 至 1024 之间，当前值：{options.MaxQueuedRequests}。");
         }
+
+        ValidateReconnectPolicy(options.Reconnect);
+    }
+
+    private static void ValidateReconnectPolicy(S7ReconnectPolicy? policy)
+    {
+        if (policy is null)
+        {
+            throw InvalidPolicy("Reconnect 策略不得为 null。");
+        }
+
+        if (policy.MaxAttempts is < 0 or > 100)
+        {
+            throw InvalidPolicy($"MaxAttempts 必须在 0 至 100 之间（0 表示不限），当前值：{policy.MaxAttempts}。");
+        }
+
+        if (policy.InitialDelay < TimeSpan.FromMilliseconds(100) || policy.InitialDelay > TimeSpan.FromSeconds(30))
+        {
+            throw Invalid(
+                S7ErrorCode.InvalidTimeout,
+                $"Reconnect.InitialDelay 必须在 100 毫秒至 30 秒之间，当前值：{policy.InitialDelay.TotalMilliseconds} 毫秒。");
+        }
+
+        if (policy.MaxDelay < TimeSpan.FromSeconds(1) || policy.MaxDelay > TimeSpan.FromSeconds(300))
+        {
+            throw Invalid(
+                S7ErrorCode.InvalidTimeout,
+                $"Reconnect.MaxDelay 必须在 1 至 300 秒之间，当前值：{policy.MaxDelay.TotalSeconds} 秒。");
+        }
+
+        if (policy.MaxDelay < policy.InitialDelay)
+        {
+            throw InvalidPolicy(
+                $"Reconnect.MaxDelay 不得小于 InitialDelay，当前值：MaxDelay={policy.MaxDelay.TotalSeconds} 秒，InitialDelay={policy.InitialDelay.TotalSeconds} 秒。");
+        }
+
+        if (policy.WaitTimeout < TimeSpan.Zero || policy.WaitTimeout > TimeSpan.FromSeconds(120))
+        {
+            throw Invalid(
+                S7ErrorCode.InvalidTimeout,
+                $"Reconnect.WaitTimeout 必须在 0 至 120 秒之间（0 表示不等待），当前值：{policy.WaitTimeout.TotalSeconds} 秒。");
+        }
+
+        if (policy.BackoffMultiplier is < 1.0 or > 10.0)
+        {
+            throw InvalidPolicy($"Reconnect.BackoffMultiplier 必须在 1.0 至 10.0 之间，当前值：{policy.BackoffMultiplier}。");
+        }
+
+        if (policy.JitterFactor is < 0.0 or > 0.5)
+        {
+            throw InvalidPolicy($"Reconnect.JitterFactor 必须在 0 至 0.5 之间，当前值：{policy.JitterFactor}。");
+        }
     }
 
     private static void ValidateTimeout(TimeSpan value, int minSeconds, int maxSeconds, string name)
@@ -69,5 +121,10 @@ internal static class OptionsValidator
     private static S7ClientException Invalid(S7ErrorCode code, string message)
     {
         return new S7ClientException(S7ErrorCategory.InvalidArgument, code, S7OperationStage.Validate, message);
+    }
+
+    private static S7ClientException InvalidPolicy(string message)
+    {
+        return Invalid(S7ErrorCode.InvalidReconnectPolicy, message);
     }
 }

@@ -60,7 +60,10 @@ public enum S7SessionState
     Connected = 2,
 
     /// <summary>会话异常，需调用方显式断开后重连。</summary>
-    Faulted = 3
+    Faulted = 3,
+
+    /// <summary>连接中断，正在自动重连；此状态下禁止发送读写帧。</summary>
+    Reconnecting = 4
 }
 
 /// <summary>
@@ -111,7 +114,10 @@ public enum S7OperationStage
     Write = 5,
 
     /// <summary>断开阶段。</summary>
-    Disconnect = 6
+    Disconnect = 6,
+
+    /// <summary>自动重连阶段。</summary>
+    Reconnect = 7
 }
 
 /// <summary>
@@ -136,6 +142,9 @@ public enum S7ErrorCode
 
     /// <summary>PDU 申请值超出 240 至 960。</summary>
     InvalidPduSize = 105,
+
+    /// <summary>重连策略项非法（尝试次数、退避倍数、抖动比例或上下限关系不满足）。</summary>
+    InvalidReconnectPolicy = 106,
 
     /// <summary>DB 号非法。</summary>
     InvalidDbNumber = 110,
@@ -163,6 +172,9 @@ public enum S7ErrorCode
 
     /// <summary>请求队列超出上限。</summary>
     QueueOverflow = 203,
+
+    /// <summary>连接中断，正在自动重连且等待窗口已到期或为零。</summary>
+    SessionReconnecting = 204,
 
     /// <summary>TCP 连接失败。</summary>
     TcpConnectFailed = 300,
@@ -223,6 +235,12 @@ public enum S7ErrorCode
 
     /// <summary>调用方取消。</summary>
     OperationCancelled = 603,
+
+    /// <summary>重连尝试次数耗尽，会话回到未连接。</summary>
+    ReconnectExhausted = 604,
+
+    /// <summary>重连被显式断开或客户端释放中止。</summary>
+    ReconnectAborted = 605,
 
     /// <summary>地址表达式语法非法（空、内部空白、长度超过 64、非 ASCII、负号、非法分隔符或后缀组合）。</summary>
     AddressSyntaxInvalid = 130,

@@ -13,4 +13,16 @@ public readonly record struct SessionSnapshot
 
     /// <summary>协商得到的 PDU 大小；未连接时为 0。</summary>
     public int NegotiatedPduSize { get; init; }
+
+    /// <summary>是否启用断线自动重连。</summary>
+    public bool AutoReconnectEnabled { get; init; }
+
+    /// <summary>当前重连尝试序号；非重连状态为 0。</summary>
+    public int ReconnectAttempt { get; init; }
+
+    /// <summary>最近一次重连成功时间（UTC）；从未成功为 <see langword="null"/>。</summary>
+    public DateTimeOffset? LastReconnectAt { get; init; }
+
+    /// <summary>下一次重连尝试前的计划退避时长；非重连状态或无需等待为 <see langword="null"/>。</summary>
+    public TimeSpan? NextReconnectDelay { get; init; }
 }

@@ -85,6 +85,18 @@ public readonly record struct S7LogEntry
     /// 非字符串类型与非类型化条目为 <see langword="null"/>。
     /// </summary>
     public int? Capacity { get; init; }
+
+    /// <summary>当前重连尝试序号；非重连条目为 <see langword="null"/>。</summary>
+    public int? Attempt { get; init; }
+
+    /// <summary>最大重连尝试次数；0 表示不限，非重连条目为 <see langword="null"/>。</summary>
+    public int? MaxAttempts { get; init; }
+
+    /// <summary>本次重连尝试的退避时长；非重连条目为 <see langword="null"/>。</summary>
+    public TimeSpan? ReconnectDelay { get; init; }
+
+    /// <summary>从断线到重连成功或耗尽的持续时长；非重连条目为 <see langword="null"/>。</summary>
+    public TimeSpan? DisconnectedDuration { get; init; }
 }
 
 /// <summary>

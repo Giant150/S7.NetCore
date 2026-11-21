@@ -12,6 +12,8 @@ internal sealed class FakeTcpTransport : ITcpTransport
     private byte[]? _current;
     private int _currentOffset;
     private volatile bool _open;
+    private int _requestsSinceConnect;
+    private int _failureConsumed;
 
     public List<byte[]> ReceivedFrames { get; } = [];
 
@@ -35,12 +37,25 @@ internal sealed class FakeTcpTransport : ITcpTransport
 
     public byte[] Memory { get; } = new byte[65536];
 
+    public int FailAfterRequestCount { get; set; } = -1;
+
+    public bool FailOnce { get; set; } = true;
+
+    public int FailConnectAttempts { get; set; }
+
     public bool IsOpen => _open;
 
     public Task ConnectAsync(string host, int port, TimeSpan timeout, CancellationToken cancellationToken)
     {
+        if (FailConnectAttempts > 0)
+        {
+            FailConnectAttempts--;
+            throw new TransportException(S7ErrorCode.TcpConnectFailed, "模拟连接失败。");
+        }
+
         _open = true;
         ConnectedCount++;
+        Interlocked.Exchange(ref _requestsSinceConnect, 0);
         return Task.CompletedTask;
     }
 
@@ -53,6 +68,24 @@ internal sealed class FakeTcpTransport : ITcpTransport
 
         byte[] request = buffer.ToArray();
         ReceivedFrames.Add(request);
+
+        int requestIndex = Interlocked.Increment(ref _requestsSinceConnect);
+        bool failNow = FailAfterRequestCount > 0
+            && requestIndex >= FailAfterRequestCount
+            && (!FailOnce || Interlocked.Exchange(ref _failureConsumed, 1) == 0);
+        if (failNow)
+        {
+            _open = false;
+            try
+            {
+                _signal.Release();
+            }
+            catch (SemaphoreFullException)
+            {
+            }
+
+            return ValueTask.CompletedTask;
+        }
 
         byte[]? response = RequestInterceptor is null
             ? DefaultResponse(request)

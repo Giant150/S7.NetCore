@@ -27,6 +27,7 @@
 - 类型化读写与单请求位写（只改变目标位，1 次往返）
 - 统一错误模型（六类错误 + 稳定错误码 + PLC 原始返回码）
 - 结构化诊断日志、可选帧级协议跟踪、日志失败隔离
+- 断线自动重连（默认关闭；连接类故障触发，含退避、请求等待与结果恢复元数据）
 - 纯托管实现，无 `DllImport`、无原生 Snap7 库、无第三方 S7 通讯库
 
 **明确不做**
@@ -36,7 +37,7 @@
 - 一次请求中的多变量批量读写
 - Timer / Counter 区域
 - PLC 时钟、SZL、块列表/上传/下载、CPU 启停
-- PLC 服务端模拟、自动重连、连接池
+- PLC 服务端模拟、连接池
 
 ## 快速开始
 
@@ -228,7 +229,48 @@ catch (S7ClientException ex)
 - 排队深度由 `MaxQueuedRequests` 限制（默认 32），超出返回 `QueueOverflow`
 - 已连接时重复连接返回 `SessionAlreadyConnected`
 - `DisconnectAsync` 幂等；`Faulted` 状态下读写返回 `SessionFaulted`，需显式断开后重连
-- 组件不自动重连
+- 默认不自动重连；启用 `Reconnect` 后按策略恢复。重连期间读写等待窗口到期返回 `SessionReconnecting`(204)，重连耗尽返回 `ReconnectExhausted`(604)，被显式断开或客户端释放中止返回 `ReconnectAborted`(605)
+
+## 断线自动重连
+
+自动重连默认关闭；通过 `S7ConnectionOptions.Reconnect` 显式启用。仅连接类故障触发（读写超时默认不触发），初次显式连接失败不触发。重连期间同一会话的读写请求在等待窗口内等待恢复；单次调用最多因重连恢复一次。
+
+```csharp
+var options = new S7ConnectionOptions
+{
+    IpAddress = "192.168.0.10",
+    CpuType = S7CpuType.S71200,
+    Rack = 0,
+    Slot = 1,
+    Reconnect = new S7ReconnectPolicy
+    {
+        AutoReconnectEnabled = true,
+        MaxAttempts = 5,
+        InitialDelay = TimeSpan.FromSeconds(1),
+        MaxDelay = TimeSpan.FromSeconds(30),
+        WaitTimeout = TimeSpan.FromSeconds(10)
+    }
+};
+await using var client = new S7Client(options);
+client.ReconnectEvent += (_, e) => Console.WriteLine($"{e.Kind} attempt={e.Attempt} error={e.ErrorCode}");
+```
+
+| 策略项 | 默认值 | 取值范围 / 说明 |
+|--------|--------|----------------|
+| `AutoReconnectEnabled` | `false` | 是否启用 |
+| `MaxAttempts` | `5` | 0 至 100；0 表示不限 |
+| `InitialDelay` | `1 s` | 100 ms 至 30 s |
+| `MaxDelay` | `30 s` | 1 至 300 s，且不小于 `InitialDelay` |
+| `BackoffMultiplier` | `2.0` | 1.0 至 10.0 |
+| `JitterFactor` | `0.2` | 0 至 0.5 |
+| `WaitTimeout` | `10 s` | 0 至 120 s；0 表示不等待 |
+| `ReconnectOnTimeout` | `false` | 读写超时是否触发重连 |
+| `ReplayUncertainWrites` | `false` | 结果不确定的写入是否允许重放 |
+
+- 分包读取在断线后从头重读，不跨会话拼接；结果不确定的写入默认直接失败并保留 `BytesWritten` / `WrittenRange` / `WriteOutcomeUncertain`，开启 `ReplayUncertainWrites` 后从首个未确认分段起点继续。
+- 重连成功后会话标识与协商 PDU 更新；`ReadBytesResultAsync` / `WriteBytesResultAsync` / `ReadValueAsync` 携带 `RecoveryCount`（0 或 1）与 `Retried`。
+- 启用重连时应注入 `transportFactory`（每次重连获取新传输实例）；注入单实例 `transport` 且不提供工厂的组合同样能工作于内存假传输，但不适用于 `TcpTransport` 释放后不可复用的场景。
+- 重连期间显式 `ConnectAsync` 返回 `SessionAlreadyConnected`；`DisconnectAsync` / `DisposeAsync` 会中止重连，终态为 `Disconnected`。
 
 ## 日志与协议跟踪
 
@@ -315,9 +357,10 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 330 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| net10.0 全量测试 | 340 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| 全量测试 | 330 项全部通过（Debug / Release） |
+| 全量测试 | 340 项全部通过（Release / net10.0） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | 65/65 通过（55 项迁移 + 10 项新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | 关闭/无库跳过语义 | `SERVER=off` 与无效库路径：59 项跳过、6 项通过、0 失败 |
@@ -346,11 +389,11 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 - 多变量打包读写
 - Timer / Counter 区域
 - PLC 时钟、SZL 与块操作
-- 自动重连、连接池与多会话并发
+- 连接池与多会话并发
 
 ## 变更记录与迁移
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0 |
+| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据） |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |
