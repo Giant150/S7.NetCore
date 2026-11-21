@@ -5,13 +5,15 @@
     <AssemblyName>S7.NetCore</AssemblyName>
     <PackageId>Snap7.NetCore</PackageId>
     <Description>Managed Siemens S7 PLC communication component for .NET 10 (byte read/write only).</Description>
-    <Authors>Giant150</Authors>
-    <Copyright>Copyright (c) 2026 Giant150</Copyright>
+    <Authors>Giant</Authors>
+    <Copyright>Copyright (c) 2026 Giant</Copyright>
     <PackageLicenseExpression>Apache-2.0</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/Giant150/S7.NetCore</PackageProjectUrl>
     <RepositoryUrl>https://github.com/Giant150/S7.NetCore</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
     <PackageTags>siemens;s7;plc;s7-1200;s7-1500;industrial-automation</PackageTags>
+    <Title>S7.NetCore</Title>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
   </PropertyGroup>
 
   <ItemGroup>
@@ -20,6 +22,13 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="S7.NetCore.Tests" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="..\..\README.md">
+      <Pack>True</Pack>
+      <PackagePath>\</PackagePath>
+    </None>
   </ItemGroup>
 
 </Project>
