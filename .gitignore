@@ -12,6 +12,8 @@ TestResults/
 *.userosscache
 *.sln.docstates
 
+.codeartsdoer/
+
 ## NuGet
 *.nupkg
 *.snupkg
