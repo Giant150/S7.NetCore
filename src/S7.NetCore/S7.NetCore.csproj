@@ -3,7 +3,7 @@
   <PropertyGroup>
     <RootNamespace>S7.NetCore</RootNamespace>
     <AssemblyName>S7.NetCore</AssemblyName>
-    <PackageId>S7.NetCore</PackageId>
+    <PackageId>Snap7.NetCore</PackageId>
     <Description>Managed Siemens S7 PLC communication component for .NET 10 (byte read/write only).</Description>
     <Authors>Giant150</Authors>
     <Copyright>Copyright (c) 2026 Giant150</Copyright>
