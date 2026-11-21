@@ -3,7 +3,7 @@
   <PropertyGroup>
     <RootNamespace>S7.NetCore</RootNamespace>
     <AssemblyName>S7.NetCore</AssemblyName>
-    <PackageId>Snap7.NetCore</PackageId>
+    <PackageId>SiemensS7.NetCore</PackageId>
     <Description>Communicate with Siemens PLC using the S7 protocol.
 使用S7协议与西门子PLC通讯</Description>
     <Authors>Giant</Authors>
