@@ -365,7 +365,7 @@ dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.
 
 # 校验四框架产物与 NuGet 包
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
-pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.2.1.0.nupkg
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/Siemens.S7.NetCore.3.0.0.nupkg
 ```
 
 ## WPF 调试工具（S7.NetCore.Tools）
@@ -433,6 +433,7 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；主窗口标题/句柄存在，异常日志为空（6 秒冒烟） |
 | WPF 手动验收 M1～M15 | **未执行**（需要真实/虚拟 PLC 与交互式 UI） |
 | 全量测试 | 363 项全部通过（Release / net10.0） |
+| 版本 3.0.0 | `VersionPrefix`、程序集版本与包版本均为 `3.0.0`；包标识为 `Siemens.S7.NetCore`；`Siemens.S7.NetCore.3.0.0.nupkg` 与 `.snupkg` 生成并通过四框架资产/依赖校验 |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
@@ -469,5 +470,6 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 3.0.0 | 2026-11-22 | 版本号跨主版本提升至 3.0.0（主版本 2 → 3）；包版本与程序集版本同步为 3.0.0；NuGet 包标识由 `SiemensS7.NetCore` 调整为 `Siemens.S7.NetCore`，包文件更名为 `Siemens.S7.NetCore.3.0.0.nupkg` / `.snupkg`；项目名称、程序集名与根命名空间保持不变 |
 | 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140）；新增 `S7.NetCore.Tools` WPF 调试工具首版（连接/字节/类型化/日志/自动重连 UI，`net10.0-windows`） |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |

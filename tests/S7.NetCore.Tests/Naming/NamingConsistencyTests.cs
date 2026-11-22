@@ -224,14 +224,14 @@ public sealed class NamingConsistencyTests
     }
 
     [Fact]
-    public void N15_VersionIsMajor2()
+    public void N15_VersionIsMajor3()
     {
         string props = File.ReadAllText(Path.Combine(Root, "Directory.Build.props"));
-        Assert.Contains("<VersionPrefix>2.1.0</VersionPrefix>", props, StringComparison.Ordinal);
+        Assert.Contains("<VersionPrefix>3.0.0</VersionPrefix>", props, StringComparison.Ordinal);
 
         Version? version = typeof(S7Client).Assembly.GetName().Version;
         Assert.NotNull(version);
-        Assert.Equal(2, version!.Major);
+        Assert.Equal(3, version!.Major);
     }
 
     [Fact]

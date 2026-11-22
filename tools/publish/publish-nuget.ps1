@@ -10,9 +10,9 @@
 .EXAMPLE
   $env:NUGET_API_KEY = '<your-api-key>'
   pwsh -File tools/publish/publish-nuget.ps1
-  pwsh -File tools/publish/publish-nuget.ps1 -Version v2.1.1
+  pwsh -File tools/publish/publish-nuget.ps1 -Version v3.0.0
   pwsh -File tools/publish/publish-nuget.ps1 -PackOnly
-  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 2.1.0
+  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 3.0.0
 
 .NOTES
   版本：-Version 优先；否则读取 Directory.Build.props 的 VersionPrefix，仅去掉 v/V 前缀。
@@ -25,7 +25,7 @@ param([string]$Version, [switch]$SkipBuild, [switch]$PackOnly)
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$PackageId = 'SiemensS7.NetCore'; $NuGetSource = 'https://api.nuget.org/v3/index.json'
+$PackageId = 'Siemens.S7.NetCore'; $NuGetSource = 'https://api.nuget.org/v3/index.json'
 $SolutionPath = 'S7.NetCore.sln'; $ProjectPath = 'src/S7.NetCore/S7.NetCore.csproj'; $PackagesDirectory = 'artifacts/packages'
 $VerifyScript = 'tools/build/verify-frameworks.ps1'
 $RepositoryRoot = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
