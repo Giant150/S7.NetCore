@@ -368,6 +368,23 @@ pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.2.1.0.nupkg
 ```
 
+## WPF 调试工具（S7.NetCore.Tools）
+
+`src/S7.NetCore.Tools` 是 Windows 专用 WPF 工具（`net10.0-windows`、`WinExe`），通过 `S7.NetCore` 公开 API 操作 PLC。首版包含：
+
+- 连接配置：IP/CPU/端口/机架/槽位/本地与远端 TSAP/三类超时/PDU/请求队列/协议跟踪，五态可用性与状态时间线。
+- 自动重连 9 项策略完整配置。
+- 原始字节读写：I/Q/M/DB、十六进制解析、写保护、超 512 字节二次确认、可选回读校验。
+- 十一种数据类型单值读写。
+- 基础操作日志：10000 条环形、级别/类别/关键字筛选、复制、清空；可选显示库诊断。
+- 写保护默认锁定，退出时断开会话。
+
+```bash
+dotnet run --project src/S7.NetCore.Tools -c Debug
+```
+
+首版不包含结构体读写、轮询监控、日志导出/诊断包、配置档案持久化；不新增工具测试工程。手动验收 M1～M15 需要真实或虚拟 PLC 并交互操作，本环境未执行。
+
 ## 嵌入式虚拟 PLC（测试服务器夹具）
 
 真实链路测试由测试进程内的原生 Snap7 `S7Server`（仅经 `snap7.net.cs` 托管）创建虚拟 PLC，默认端点 **`127.0.0.1:1102`**；外部 `127.0.0.1:102` 实例不再参与测试（生产客户端默认端口仍为 102）。运行验证仅在 Windows 执行，Linux 不执行虚拟 S7Server 验证。
@@ -410,6 +427,8 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
 | 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
+| WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；启动后窗口保持运行（4 秒冒烟） |
+| WPF 手动验收 M1～M15 | **未执行**（需要真实/虚拟 PLC 与交互式 UI） |
 | 全量测试 | 363 项全部通过（Release / net10.0） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
@@ -447,5 +466,5 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140） |
+| 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140）；新增 `S7.NetCore.Tools` WPF 调试工具首版（连接/字节/类型化/日志/自动重连 UI，`net10.0-windows`） |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |

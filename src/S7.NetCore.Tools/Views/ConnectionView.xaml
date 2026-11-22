@@ -1,0 +1,103 @@
+<UserControl x:Class="S7.NetCore.Tools.Views.ConnectionView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="12">
+            <GroupBox Header="基础参数" IsEnabled="{Binding IsEditable}">
+                <StackPanel Margin="8">
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="IP 地址" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="220" Text="{Binding Settings.IpAddress, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="CPU 型号" Width="120" VerticalAlignment="Center" />
+                        <ComboBox Width="220" ItemsSource="{Binding CpuTypes}" SelectedItem="{Binding Settings.CpuType}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource EnumDescriptionConverter}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="端口" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="220" Text="{Binding Settings.Port, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="机架 / 槽位" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.Rack, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text=" / " VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.Slot, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="本地 TSAP" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.LocalTsapFirst, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                        <TextBlock Text=" . " VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.LocalTsapSecond, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="远端 TSAP" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.RemoteTsapFirst, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                        <TextBlock Text=" . " VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.RemoteTsapSecond, UpdateSourceTrigger=PropertyChanged, TargetNullValue=''}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="连接超时（秒）" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="220" Text="{Binding Settings.ConnectTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="读取超时（秒）" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="220" Text="{Binding Settings.ReadTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="写入超时（秒）" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="220" Text="{Binding Settings.WriteTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="PDU / 队列" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.RequestedPduSize, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text=" / " VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding Settings.MaxQueuedRequests, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <CheckBox Content="输出帧级协议跟踪" IsChecked="{Binding Settings.EnableProtocolTrace}" Margin="0,8,0,0" />
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="自动重连策略" Margin="0,10,0,0">
+                <StackPanel Margin="8" DataContext="{Binding Reconnect}">
+                    <CheckBox Content="启用自动重连" IsChecked="{Binding AutoReconnectEnabled}" Margin="0,4" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="最大尝试次数" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding MaxAttempts, UpdateSourceTrigger=PropertyChanged}" />
+                        <TextBlock Text="0 表示不限次数" Margin="10,0,0,0" Foreground="#666" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="首次退避（毫秒）" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding InitialDelayMilliseconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="退避上限（秒）" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding MaxDelaySeconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="退避倍数" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding BackoffMultiplier, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="抖动比例" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding JitterFactor, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="等待窗口（秒）" Width="140" VerticalAlignment="Center" />
+                        <TextBox Width="100" Text="{Binding WaitTimeoutSeconds, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <CheckBox Content="读写超时也触发重连" IsChecked="{Binding ReconnectOnTimeout}" Margin="0,4" />
+                    <CheckBox Content="允许重放结果不确定的写入" IsChecked="{Binding ReplayUncertainWrites}" Margin="0,4" />
+                </StackPanel>
+            </GroupBox>
+
+            <TextBlock Text="{Binding ValidationSummary}" Foreground="#C62828" TextWrapping="Wrap" Margin="0,10,0,0" />
+            <Button Content="连接 PLC" Command="{Binding ConnectCommand}" HorizontalAlignment="Left" Padding="20,8" Margin="0,10,0,0" />
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

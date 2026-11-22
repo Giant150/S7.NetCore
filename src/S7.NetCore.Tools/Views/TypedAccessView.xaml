@@ -1,0 +1,52 @@
+<UserControl x:Class="S7.NetCore.Tools.Views.TypedAccessView"
+             xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+             xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
+    <ScrollViewer VerticalScrollBarVisibility="Auto">
+        <StackPanel Margin="12">
+            <GroupBox Header="地址、类型与值">
+                <StackPanel Margin="8">
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="地址表达式" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="240" Text="{Binding Address, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <TextBlock Text="{Binding AddressError}" Foreground="#C62828" Margin="120,0,0,0" />
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="数据类型" Width="120" VerticalAlignment="Center" />
+                        <ComboBox Width="240" ItemsSource="{Binding DataTypes}" SelectedItem="{Binding DataType}">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <TextBlock Text="{Binding Converter={StaticResource EnumDescriptionConverter}}" />
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                        </ComboBox>
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4">
+                        <TextBlock Text="字符串容量" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="240" IsEnabled="{Binding IsStringType}" Text="{Binding Capacity, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <StackPanel Orientation="Horizontal" Margin="0,4" Visibility="{Binding IsBoolType, Converter={StaticResource InverseBoolToVis}}">
+                        <TextBlock Text="写入值" Width="120" VerticalAlignment="Center" />
+                        <TextBox Width="240" Text="{Binding ValueText, UpdateSourceTrigger=PropertyChanged}" />
+                    </StackPanel>
+                    <CheckBox Content="Bool 值（true / false）"
+                              IsChecked="{Binding BoolValue}"
+                              Margin="120,6,0,0"
+                              Visibility="{Binding IsBoolType, Converter={StaticResource BoolToVis}}" />
+                    <TextBlock Text="{Binding ValueError}" Foreground="#C62828" Margin="120,0,0,0" />
+                    <StackPanel Orientation="Horizontal" Margin="0,10,0,0">
+                        <Button Content="读取" Command="{Binding ReadCommand}" Padding="20,6" Margin="0,0,8,0" />
+                        <Button Content="写入" Command="{Binding WriteCommand}" Padding="20,6" />
+                    </StackPanel>
+                </StackPanel>
+            </GroupBox>
+
+            <GroupBox Header="结果" Margin="0,10,0,0">
+                <StackPanel Margin="8">
+                    <TextBox Text="{Binding ResultText}" IsReadOnly="True" Height="160" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                    <TextBlock Text="{Binding RecoveryText}" Foreground="#555" Margin="0,8,0,0" />
+                    <TextBlock Text="{Binding ErrorText}" Foreground="#C62828" TextWrapping="Wrap" Margin="0,8,0,0" />
+                </StackPanel>
+            </GroupBox>
+        </StackPanel>
+    </ScrollViewer>
+</UserControl>

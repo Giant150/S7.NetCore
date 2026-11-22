@@ -35,18 +35,19 @@ public sealed class NamingConsistencyTests
     }
 
     [Fact]
-    public void N03_SolutionListsTwoNewProjects()
+    public void N03_SolutionListsExpectedProjects()
     {
         string solution = File.ReadAllText(Path.Combine(Root, "S7.NetCore.sln"));
 
         Assert.Contains("src\\S7.NetCore\\S7.NetCore.csproj", solution, StringComparison.Ordinal);
         Assert.Contains("tests\\S7.NetCore.Tests\\S7.NetCore.Tests.csproj", solution, StringComparison.Ordinal);
+        Assert.Contains("src\\S7.NetCore.Tools\\S7.NetCore.Tools.csproj", solution, StringComparison.Ordinal);
         Assert.DoesNotContain("Snap7.NetCore", solution, StringComparison.Ordinal);
 
         int projectCount = solution
             .Split('\n')
-            .Count(line => line.TrimStart().StartsWith("Project(", StringComparison.Ordinal));
-        Assert.Equal(2, projectCount);
+            .Count(line => line.Contains(".csproj", StringComparison.Ordinal));
+        Assert.Equal(3, projectCount);
     }
 
     [Fact]
