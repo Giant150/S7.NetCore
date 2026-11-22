@@ -19,7 +19,6 @@ internal sealed record VirtualPlcServerSettings(
     int Rack,
     int Slot,
     bool AllowNonLoopback,
-    string? LibraryPath,
     int MaxClients)
 {
     internal VirtualPlcEndpoint Endpoint => new(Host, Port, CpuType, Rack, Slot);
@@ -66,9 +65,6 @@ internal sealed record VirtualPlcServerSettings(
             "S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK",
             Get("S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK", "false"));
 
-        string libraryText = Get("S7_VIRTUAL_PLC_SERVER_LIBRARY", string.Empty);
-        string? libraryPath = string.IsNullOrWhiteSpace(libraryText) ? null : libraryText;
-
         int maxClients = ParseInt(
             "S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS",
             Get("S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS", "1"),
@@ -83,7 +79,6 @@ internal sealed record VirtualPlcServerSettings(
             rack,
             slot,
             allowNonLoopback,
-            libraryPath,
             maxClients);
     }
 

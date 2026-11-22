@@ -37,11 +37,7 @@ namespace Snap7
 
     public class S7Consts
     {
-        #if __MonoCS__  // Assuming that we are using Unix release of Mono (otherwise modify it)
-            public const string Snap7LibName = "libsnap7.so";
-        #else
-            public const string Snap7LibName = "snap7.dll";
-        #endif
+        public const string Snap7LibName = "snap7.dll";
         //------------------------------------------------------------------------------
         //                                  PARAMS LIST            
         //------------------------------------------------------------------------------
@@ -1955,15 +1951,31 @@ namespace Snap7
 
         [DllImport(S7Consts.Snap7LibName)]
         protected static extern int Srv_Destroy(ref IntPtr Server);
-        ~S7Server()
+
+        public int Destroy()
         {
+            if (Server == IntPtr.Zero)
+            {
+                return 0;
+            }
+
             foreach(var Item in HArea)
             {
                 GCHandle handle = Item.Value;
-                if (handle!=null)
+                if (handle.IsAllocated)
                     handle.Free();
             }
-            Srv_Destroy(ref Server);
+
+            HArea.Clear();
+            int result = Srv_Destroy(ref Server);
+            Server = IntPtr.Zero;
+            GC.SuppressFinalize(this);
+            return result;
+        }
+
+        ~S7Server()
+        {
+            _ = Destroy();
         }
         
         [DllImport(S7Consts.Snap7LibName)]

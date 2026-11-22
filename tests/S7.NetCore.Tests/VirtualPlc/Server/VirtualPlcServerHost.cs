@@ -60,43 +60,63 @@ internal sealed class VirtualPlcServerHost
         }
 
         var stopwatch = Stopwatch.StartNew();
-        VirtualPlcNativeLibraryProbe probe = VirtualPlcNativeLibrary.Probe(_settings.LibraryPath);
+        VirtualPlcPresenceProbe probe = VirtualPlcLibraryPresence.Probe();
         if (!probe.Available)
         {
             throw new VirtualPlcEnvironmentSkipException(probe.Reason, probe.Detail);
         }
-
-        VirtualPlcNativeLibrary.EnsureResolver(_settings.LibraryPath);
 
         S7Server? server = null;
         VirtualPlcRegionRegistry? regions = null;
 
         try
         {
-            server = new S7Server();
-            if (NativeServerInterop.GetHandle(server) == IntPtr.Zero)
+            try
             {
-                throw new VirtualPlcFailureException("Srv_Create", "Srv_Create 返回空句柄。");
-            }
-
-            SetParameters(server);
-
-            regions = new VirtualPlcRegionRegistry();
-            regions.Register(server);
-
-            int startResult = server.StartTo(_settings.Host);
-            if (startResult != 0)
-            {
-                string errorText = server.ErrorText(startResult);
-
-                if (IsPortInUse(errorText))
+                server = new S7Server();
+                if (NativeServerInterop.GetHandle(server) == IntPtr.Zero)
                 {
-                    throw new VirtualPlcEnvironmentSkipException(
-                        VirtualPlcSkipReason.PortInUse,
-                        $"端口 {_settings.Port} 被占用：{errorText}");
+                    throw new VirtualPlcFailureException("Srv_Create", "Srv_Create 返回空句柄。");
                 }
 
-                throw new VirtualPlcFailureException("绑定启动", errorText, startResult);
+                SetParameters(server);
+
+                regions = new VirtualPlcRegionRegistry();
+                regions.Register(server);
+
+                int startResult = server.StartTo(_settings.Host);
+                if (startResult != 0)
+                {
+                    string errorText = server.ErrorText(startResult);
+
+                    if (IsPortInUse(errorText))
+                    {
+                        throw new VirtualPlcEnvironmentSkipException(
+                            VirtualPlcSkipReason.PortInUse,
+                            $"端口 {_settings.Port} 被占用：{errorText}");
+                    }
+
+                    throw new VirtualPlcFailureException("绑定启动", errorText, startResult);
+                }
+            }
+            catch (DllNotFoundException exception)
+            {
+                throw new VirtualPlcEnvironmentSkipException(
+                    VirtualPlcSkipReason.LibraryMissing,
+                    $"无法加载 snap7.dll：{exception.Message}。"
+                    + "请确认测试输出目录包含 Windows x64 的 snap7.dll。");
+            }
+            catch (BadImageFormatException exception)
+            {
+                throw new VirtualPlcEnvironmentSkipException(
+                    VirtualPlcSkipReason.LibraryBadImage,
+                    $"snap7.dll 架构不匹配：{exception.Message}。请使用 Windows x64 原生库。");
+            }
+            catch (EntryPointNotFoundException exception)
+            {
+                throw new VirtualPlcEnvironmentSkipException(
+                    VirtualPlcSkipReason.LibraryEntryPointMissing,
+                    $"snap7.dll 缺少入口点：{exception.Message}。");
             }
 
             VirtualPlcObservedBaseline baseline = await SelfTestAsync(cancellationToken)
@@ -190,7 +210,7 @@ internal sealed class VirtualPlcServerHost
             regions.UnregisterAll(server);
         }
 
-        NativeServerInterop.Destroy(server);
+        server.Destroy();
         VerifyPortReleased();
 
         Snapshot = new VirtualPlcServerSnapshot
@@ -403,7 +423,7 @@ internal sealed class VirtualPlcServerHost
 
         try
         {
-            NativeServerInterop.Destroy(server);
+            server.Destroy();
         }
         catch
         {

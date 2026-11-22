@@ -370,7 +370,7 @@ pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifact
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
 
-真实链路测试由测试进程内的原生 Snap7 `S7Server` 创建虚拟 PLC，默认端点 **`127.0.0.1:1102`**；外部 `127.0.0.1:102` 实例不再参与测试（生产客户端默认端口仍为 102）。
+真实链路测试由测试进程内的原生 Snap7 `S7Server`（仅经 `snap7.net.cs` 托管）创建虚拟 PLC，默认端点 **`127.0.0.1:1102`**；外部 `127.0.0.1:102` 实例不再参与测试（生产客户端默认端口仍为 102）。运行验证仅在 Windows 执行，Linux 不执行虚拟 S7Server 验证。
 
 | 环境变量 | 默认值 | 说明 |
 |---------|-------|------|
@@ -381,7 +381,6 @@ pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifact
 | `S7_VIRTUAL_PLC_RACK` | `0` | 0～15 |
 | `S7_VIRTUAL_PLC_SLOT` | `1` | 0～15 |
 | `S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK` | `false` | 非回环写用例开关 |
-| `S7_VIRTUAL_PLC_SERVER_LIBRARY` | 空 | 空 = 自动查找 `snap7.dll` / `libsnap7.so` |
 | `S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS` | `1` | 1～8 |
 
 ```bash
@@ -391,10 +390,10 @@ dotnet test --filter "Category=Naming"
 ```
 
 - 夹具启动：创建 S7Server → 设置端口/并发/CPU 状态 → 注册 PE/PA/MK/DB1～DB3 → 初始化确定性初值 → 绑定回环启动 → 自检 → 登记实测基线
-- 停止：Stop → 注销区域 → 失效缓冲区 → 显式 `Srv_Destroy` → 端口释放核对；停止幂等，支持 3 轮重启
-- 原生资产仅测试使用：`snap7.net.cs` 由 `tests/S7.NetCore.Tests.Native` 链接编译（不加入 `.sln`），`snap7.dll` 复制到测试输出；**生产程序集零原生依赖**
-- 跳过仅限环境原因：`SERVER=off`、原生库缺失/架构不匹配、平台不支持、端口非法/被占用、外部端点不可达；区域注册、自检、断言、现场恢复、停止释放失败一律失败
-- 65 项 VirtualPlc 用例（55 项迁移 + 10 项新增）默认连接夹具端点；`SERVER=off` 或库缺失时为 59 项跳过、6 项静态/连接失败用例通过、失败 0
+- 停止：Stop → 注销区域 → 失效缓冲区 → `S7Server.Destroy()` → 端口释放核对；停止幂等，支持 3 轮重启
+- 原生资产仅测试使用：`snap7.net.cs` 由 `tests/S7.NetCore.Tests.Native` 链接编译（不加入 `.sln`），测试项目仅复制 `snap7.dll`；虚拟 S7Server 只经 `snap7.net.cs` 的 `S7Server` 托管，测试项目不定义原生绑定，也不做库路径探测或平台判定；**生产程序集零原生依赖**
+- 跳过仅限环境原因：`SERVER=off`、原生库缺失/坏映像/入口点缺失、端口非法/被占用、外部端点不可达、配置非法；区域注册、自检、断言、现场恢复、停止释放失败一律失败
+- 68 项 VirtualPlc 用例（55 项迁移 + 10 项类型化新增 + 3 项结构体新增）默认连接夹具端点；`SERVER=off` 或库缺失时为 62 项跳过、6 项静态/连接失败用例通过、失败 0
 - `S7Server` 原生接口的 `Size` 为 16 位，单区最大注册容量为 **65535** 字节（规格 65536 的偏差待评审）；`V_R04` 尾部读取调整为起始 65533 的 2 字节
 - DB2 偏移段、DB1 只读与现场快照恢复约束保持不变
 
@@ -407,17 +406,19 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 362 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| net10.0 全量测试 | 363 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
 | 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
 | 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| 全量测试 | 362 项全部通过（Release / net10.0） |
+| 全量测试 | 363 项全部通过（Release / net10.0） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
-| VirtualPlc 用例 | 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
-| 关闭/无库跳过语义 | `SERVER=off` 与无效库路径：59 项跳过、6 项通过、0 失败 |
+| VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
+| Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
+| 关闭/无库跳过语义 | `SERVER=off` 与 `snap7.dll` 缺失：62 项跳过、6 项通过、0 失败；原因分别为 ModeOff 与 LibraryMissing |
+| 端口占用语义 | 预占用 `127.0.0.1:1102`：62 项跳过、6 项通过、0 失败 |
 | 嵌入式实测基线 | PDU=480；R=462；W=445；启动 35.6ms；6 个区域 × 65535 字节 |
 | 生命周期与数据 | 3 轮停止/重启成功、端口可重绑；停止幂等；区域首字节均为 `0x0B` 且重启后一致 |
-| 命名检查 | `Category=Naming` 19 项 PASS；`tools/naming/inspect.ps1` 20 项 PASS（N-01～N-20） |
+| 命名检查 | `Category=Naming` 20 项 PASS；`tools/naming/inspect.ps1` 22 项 PASS（N-01～N-22） |
 | 回环性能 V-P01（1024 字节读，迁移前外部 102） | P95=1.5ms（min 0.7 / p50 1.1 / max 1.6） |
 | 回环性能 V-P02（连接+断开，迁移前外部 102） | P95=1.1ms（min 0.4 / p50 0.6 / max 5.7） |
 | 回环性能 T-P01（类型化 Int 读，迁移前外部 102） | P95=0.2ms（min 0.1 / p50 0.2 / max 0.2） |
@@ -425,8 +426,8 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | S7WString 字节布局/回环 | `温度A1` 头 `00 10 00 04`、UTF-16BE `6E 29 5E A6 00 41 00 31`；`😀` = `D8 3D DE 00`；空串声明长度 0；408/409 不返回部分值 |
 | D-07 位写 | 嵌入式 S7Server 支持单请求位写：1 帧 36 字节、`frame[22]=0x01`、`frame[32]=0x03`，仅目标位变化，1 次往返 |
 | 报文金标准 | COTP CR、S7 Setup、读/写请求与 `s7netplus` 逐字节一致；位写 4 组样本逐字节一致 |
-| 跨平台构建 | `win-x64`、`linux-x64` 项目级交叉构建通过；解决方案级 RID 构建受 SDK `NETSDK1134` 限制 |
-| 原生依赖检查 | 生产零原生：无 `DllImport`/`LibraryImport`/`NativeLibrary`；测试桥接项目链接 `snap7.net.cs` 并复制 `snap7.dll` |
+| 跨平台构建 | `win-x64`、`linux-x64` 项目级交叉构建通过；仅构建通过，不含虚拟 S7Server 运行验证；解决方案级 RID 构建受 SDK `NETSDK1134` 限制 |
+| 原生依赖检查 | 生产零原生：无 `DllImport`/`LibraryImport`/`NativeLibrary`；桥接项目仅链接 `snap7.net.cs`，测试项目复制 `snap7.dll` |
 | 容量偏差 V-07 | S7Server 的 `word Size` 上限 65535；规格 65536 未满足，`V_R04` 起点改为 65533；**待评审** |
 | 真实 PLC 多型号冒烟（S7-1200/1500/300/400/200Smart） | **未执行**（缺多型号设备） |
 | 局域网真实 PLC P95 | **未测量**（当前仅本机回环基线） |

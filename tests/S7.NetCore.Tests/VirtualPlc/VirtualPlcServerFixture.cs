@@ -95,7 +95,7 @@ public sealed class VirtualPlcServerFixture : IAsyncLifetime
                 return;
             }
 
-            VirtualPlcNativeLibraryProbe library = VirtualPlcNativeLibrary.Probe(settings.LibraryPath);
+            VirtualPlcPresenceProbe library = VirtualPlcLibraryPresence.Probe();
             if (!library.Available)
             {
                 _snapshot = VirtualPlcServerSnapshot.EnvironmentSkip(library.Reason, library.Detail);

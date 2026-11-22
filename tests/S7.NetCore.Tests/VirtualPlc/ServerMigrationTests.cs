@@ -7,7 +7,7 @@ public sealed class ServerMigrationTests
     private static readonly string Root = FindRepositoryRoot();
 
     [Fact]
-    public void S_D03_DefaultEndpointAndNineEnvironmentVariables()
+    public void S_D03_DefaultEndpointAndEightEnvironmentVariables()
     {
         string endpoint = File.ReadAllText(
             Path.Combine(Root, "tests", "S7.NetCore.Tests", "VirtualPlc", "VirtualPlcEndpoint.cs"));
@@ -25,12 +25,13 @@ public sealed class ServerMigrationTests
             "S7_VIRTUAL_PLC_SLOT",
             "S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK",
             "S7_VIRTUAL_PLC_SERVER",
-            "S7_VIRTUAL_PLC_SERVER_LIBRARY",
             "S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS"
         })
         {
             Assert.Contains(variable, settings, StringComparison.Ordinal);
         }
+
+        Assert.DoesNotContain("S7_VIRTUAL_PLC_SERVER_LIBRARY", settings, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -68,9 +69,32 @@ public sealed class ServerMigrationTests
             Assert.DoesNotContain("S7.NetCore.Tests.Native", content, StringComparison.Ordinal);
         }
 
+        string linuxAsset = "lib" + "snap7";
         Assert.True(
-            File.Exists(Path.Combine(AppContext.BaseDirectory, "snap7.dll")),
-            "Windows 测试输出缺少 snap7.dll。");
+            !testProject.Contains(linuxAsset, StringComparison.Ordinal),
+            $"S_M01 FAIL: 测试项目 csproj 仍包含 {linuxAsset}.so。");
+        Assert.True(
+            !nativeProject.Contains("__MonoCS__", StringComparison.Ordinal),
+            "S_M01 FAIL: 桥接项目 csproj 仍包含 __MonoCS__。");
+
+        string platformUnsupported = "Platform" + "Unsupported";
+        foreach (string file in Directory.EnumerateFiles(
+            Path.Combine(Root, "tests", "S7.NetCore.Tests", "VirtualPlc", "Server"),
+            "*.cs",
+            SearchOption.AllDirectories))
+        {
+            string content = File.ReadAllText(file);
+            string relative = Path.GetRelativePath(Root, file);
+            Assert.True(
+                !content.Contains("NativeLibrary", StringComparison.Ordinal),
+                $"S_M01 FAIL: {relative} 含 NativeLibrary。");
+            Assert.True(
+                !content.Contains("SetDllImportResolver", StringComparison.Ordinal),
+                $"S_M01 FAIL: {relative} 含 SetDllImportResolver。");
+            Assert.True(
+                !content.Contains(platformUnsupported, StringComparison.Ordinal),
+                $"S_M01 FAIL: {relative} 含 {platformUnsupported}。");
+        }
     }
 
     [Fact]

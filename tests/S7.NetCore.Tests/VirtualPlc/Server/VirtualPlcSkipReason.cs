@@ -9,7 +9,6 @@ internal enum VirtualPlcSkipReason
     LibraryMissing,
     LibraryBadImage,
     LibraryEntryPointMissing,
-    PlatformUnsupported,
     PortInvalid,
     PortInUse,
     ExternalEndpointUnreachable,

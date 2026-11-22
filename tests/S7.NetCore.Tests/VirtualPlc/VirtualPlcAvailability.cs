@@ -37,7 +37,7 @@ internal static class VirtualPlcAvailability
                     : (false, $"外部虚拟 PLC 不可达：{settings.Host}:{settings.Port}。");
             }
 
-            VirtualPlcNativeLibraryProbe library = VirtualPlcNativeLibrary.Probe(settings.LibraryPath);
+            VirtualPlcPresenceProbe library = VirtualPlcLibraryPresence.Probe();
             if (!library.Available)
             {
                 return (false, library.Detail);

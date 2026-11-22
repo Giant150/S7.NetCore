@@ -67,7 +67,7 @@ $nativeProject = Get-Content -Raw -LiteralPath $nativeProjectPath
 Check 'N-05b' ($testProject.Contains('S7.NetCore.Tests.Native') -and $nativeProject.Contains('snap7.net.cs')) '原生桥接引用不完整'
 
 $snap7Source = Join-Path $root 'tests/S7.NetCore.Tests/snap7.net.cs'
-$expectedHash = 'F0C917F51A8938A1A9A752B6821CF11857214479A4542901C9225A5E46765B16'
+$expectedHash = '91126950F65C3E583E3E5E160B6A5FA161B2A82143420ADBCDCBD47D7CDBBD5F'
 $actualHash = (Get-FileHash -LiteralPath $snap7Source -Algorithm SHA256).Hash
 Check 'N-16' ($actualHash -eq $expectedHash) "原生桥接哈希变化：$actualHash"
 
@@ -88,6 +88,30 @@ $endpointText = [IO.File]::ReadAllText(
     (Join-Path $root 'tests/S7.NetCore.Tests/VirtualPlc/VirtualPlcEndpoint.cs'),
     [Text.UTF8Encoding]::new($false))
 Check 'N-20' ($endpointText.Contains('1102')) '虚拟 PLC 默认端点不是 1102'
+
+$settingsPath = Join-Path $root 'tests/S7.NetCore.Tests/VirtualPlc/Server/VirtualPlcServerSettings.cs'
+$settingsText = Get-Content -Raw -LiteralPath $settingsPath
+$requiredVariables = @(
+    'S7_VIRTUAL_PLC_HOST',
+    'S7_VIRTUAL_PLC_PORT',
+    'S7_VIRTUAL_PLC_CPU',
+    'S7_VIRTUAL_PLC_RACK',
+    'S7_VIRTUAL_PLC_SLOT',
+    'S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK',
+    'S7_VIRTUAL_PLC_SERVER',
+    'S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS'
+)
+$missingVariables = @($requiredVariables | Where-Object { -not $settingsText.Contains($_) })
+$removedVariable = 'S7_VIRTUAL_PLC_SERVER_LIBRARY'
+Check 'N-21' ($missingVariables.Count -eq 0 -and -not $settingsText.Contains($removedVariable)) ("环境变量契约不一致：缺少 $($missingVariables -join ', ')")
+
+$serverFolder = Join-Path $root 'tests/S7.NetCore.Tests/VirtualPlc/Server'
+$forbiddenPattern = 'NativeLibrary|SetDllImportResolver|' + ('Platform' + 'Unsupported')
+$serverHits = @(Get-ChildItem -LiteralPath $serverFolder -Recurse -Filter *.cs |
+    Where-Object { $_.FullName -notmatch 'bin|obj' } |
+    Select-String -Pattern $forbiddenPattern)
+$linuxAsset = 'lib' + 'snap7.so'
+Check 'N-22' (-not $testProject.Contains($linuxAsset) -and -not $nativeProject.Contains('__MonoCS__') -and $serverHits.Count -eq 0) ("测试侧仍含 Linux 资产/自定义加载：$($serverHits.Count) 处")
 
 Write-Output ""
 if ($failures.Count -gt 0) {

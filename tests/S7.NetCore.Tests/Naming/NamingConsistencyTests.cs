@@ -145,12 +145,13 @@ public sealed class NamingConsistencyTests
             "S7_VIRTUAL_PLC_SLOT",
             "S7_VIRTUAL_PLC_ALLOW_NON_LOOPBACK",
             "S7_VIRTUAL_PLC_SERVER",
-            "S7_VIRTUAL_PLC_SERVER_LIBRARY",
             "S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS"
         })
         {
             Assert.Contains(variable, content, StringComparison.Ordinal);
         }
+
+        Assert.DoesNotContain("S7_VIRTUAL_PLC_SERVER_LIBRARY", content, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -235,7 +236,7 @@ public sealed class NamingConsistencyTests
     [Fact]
     public void N16_NativeBridgeSourceIsVerbatim()
     {
-        const string expectedHash = "F0C917F51A8938A1A9A752B6821CF11857214479A4542901C9225A5E46765B16";
+        const string expectedHash = "91126950F65C3E583E3E5E160B6A5FA161B2A82143420ADBCDCBD47D7CDBBD5F";
         string path = Path.Combine(Root, "tests", "S7.NetCore.Tests", "snap7.net.cs");
 
         using SHA256 sha = SHA256.Create();
@@ -273,13 +274,14 @@ public sealed class NamingConsistencyTests
         Assert.DoesNotContain("snap7", project, StringComparison.OrdinalIgnoreCase);
 
         string outputRoot = Path.Combine(Root, "src", "S7.NetCore", "bin");
+        string linuxLibrary = "lib" + "snap7.so";
         if (Directory.Exists(outputRoot))
         {
             foreach (string file in Directory.EnumerateFiles(outputRoot, "*", SearchOption.AllDirectories))
             {
                 string name = Path.GetFileName(file);
                 Assert.False(name.Equals("snap7.dll", StringComparison.OrdinalIgnoreCase), "N-17 FAIL: 生产输出含 snap7.dll");
-                Assert.False(name.Equals("libsnap7.so", StringComparison.OrdinalIgnoreCase), "N-17 FAIL: 生产输出含 libsnap7.so");
+                Assert.False(name.Equals(linuxLibrary, StringComparison.OrdinalIgnoreCase), "N-17 FAIL: 生产输出含 Linux 原生库");
                 Assert.False(
                     name.Equals("S7.NetCore.Tests.Native.dll", StringComparison.OrdinalIgnoreCase),
                     "N-17 FAIL: 生产输出含桥接程序集");
@@ -348,11 +350,43 @@ public sealed class NamingConsistencyTests
         foreach (string variable in new[]
         {
             "S7_VIRTUAL_PLC_SERVER",
-            "S7_VIRTUAL_PLC_SERVER_LIBRARY",
             "S7_VIRTUAL_PLC_SERVER_MAX_CLIENTS"
         })
         {
             Assert.Contains(variable, settings, StringComparison.Ordinal);
+        }
+    }
+
+    [Fact]
+    public void N21_ServerFolderHasNoCustomNativeLoading()
+    {
+        string serverDirectory = Path.Combine(
+            Root,
+            "tests",
+            "S7.NetCore.Tests",
+            "VirtualPlc",
+            "Server");
+        string platformUnsupported = "Platform" + "Unsupported";
+
+        foreach (string file in Directory.EnumerateFiles(serverDirectory, "*.cs", SearchOption.AllDirectories))
+        {
+            if (file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal)
+                || file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            string content = File.ReadAllText(file);
+            string relative = Relative(file);
+            Assert.True(
+                !content.Contains("NativeLibrary", StringComparison.Ordinal),
+                $"N21 FAIL: {relative} 含 NativeLibrary。");
+            Assert.True(
+                !content.Contains("SetDllImportResolver", StringComparison.Ordinal),
+                $"N21 FAIL: {relative} 含 SetDllImportResolver。");
+            Assert.True(
+                !content.Contains(platformUnsupported, StringComparison.Ordinal),
+                $"N21 FAIL: {relative} 含 {platformUnsupported}。");
         }
     }
 

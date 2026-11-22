@@ -12,18 +12,11 @@
     <EnableNETAnalyzers>false</EnableNETAnalyzers>
     <AnalysisLevel>none</AnalysisLevel>
     <NoWarn>CS8073;CS8618;CS0168;CS0169;CS0649;CS0414</NoWarn>
-    <DefineConstants Condition="'$(OS)' != 'Windows_NT' Or $(RuntimeIdentifier.StartsWith('linux'))">$(DefineConstants);__MonoCS__</DefineConstants>
   </PropertyGroup>
 
   <ItemGroup>
     <Compile Include="..\S7.NetCore.Tests\snap7.net.cs" Link="snap7.net.cs" />
     <Compile Include="NativeServerInterop.cs" />
-  </ItemGroup>
-
-  <ItemGroup Condition="'$(OS)' == 'Windows_NT'">
-    <None Include="..\S7.NetCore.Tests\snap7.dll" Link="snap7.dll">
-      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
-    </None>
   </ItemGroup>
 
 </Project>
