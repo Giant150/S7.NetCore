@@ -157,12 +157,12 @@ jobs:
             Write-Output '[打包] 失败'
             exit $LASTEXITCODE
           }
-          $mainPackage = Join-Path 'artifacts/packages' "Siemens.S7.NetCore.$env:RELEASE_VERSION.nupkg"
+          $mainPackage = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
           if (-not (Test-Path -LiteralPath $mainPackage)) {
             Write-Output '[打包] 失败：未产出主包文件'
             exit 1
           }
-          $symbolPackage = Join-Path 'artifacts/packages' "Siemens.S7.NetCore.$env:RELEASE_VERSION.snupkg"
+          $symbolPackage = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.snupkg"
           if (Test-Path -LiteralPath $symbolPackage) {
             Write-Output '[打包] 成功：主包与符号包已产出'
           } else {
@@ -173,7 +173,7 @@ jobs:
         timeout-minutes: 1
         shell: pwsh
         run: |
-          pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath "artifacts/packages/Siemens.S7.NetCore.$env:RELEASE_VERSION.nupkg"
+          pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath "artifacts/packages/SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
           if ($LASTEXITCODE -ne 0) {
             Write-Output '[校验] 失败：包资产'
             exit $LASTEXITCODE
@@ -192,7 +192,7 @@ jobs:
             exit 1
           }
           Write-Output '[推送] 凭证：已配置'
-          $packagePath = Join-Path 'artifacts/packages' "Siemens.S7.NetCore.$env:RELEASE_VERSION.nupkg"
+          $packagePath = Join-Path 'artifacts/packages' "SiemensS7.NetCore.$env:RELEASE_VERSION.nupkg"
           $pushOutput = & dotnet nuget push $packagePath --api-key $env:NUGET_API_KEY --source $env:NUGET_SOURCE --skip-duplicate 2>&1 | Out-String
           $exitCode = $LASTEXITCODE
           Write-Output $pushOutput
@@ -270,9 +270,9 @@ jobs:
             '## NuGet 发布结论'
             "- 运行结论：$outcome"
             "- 版本号：$version（来源：$source）"
-            '- 包标识：Siemens.S7.NetCore'
-            "- 主包：Siemens.S7.NetCore.$version.nupkg"
-            "- 符号包：Siemens.S7.NetCore.$version.snupkg（送达：$symbolStatus）"
+            '- 包标识：SiemensS7.NetCore'
+            "- 主包：SiemensS7.NetCore.$version.nupkg"
+            "- 符号包：SiemensS7.NetCore.$version.snupkg（送达：$symbolStatus）"
             "- 推送源：$env:NUGET_SOURCE（结果：$outcome）"
             ''
             '## 四框架构建结论'
