@@ -42,7 +42,7 @@
 
             <GroupBox Header="结果" Margin="0,10,0,0">
                 <StackPanel Margin="8">
-                    <TextBox Text="{Binding ResultText}" IsReadOnly="True" Height="160" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                    <TextBox Text="{Binding ResultText, Mode=OneWay}" IsReadOnly="True" Height="160" AcceptsReturn="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
                     <TextBlock Text="{Binding RecoveryText}" Foreground="#555" Margin="0,8,0,0" />
                     <TextBlock Text="{Binding ErrorText}" Foreground="#C62828" TextWrapping="Wrap" Margin="0,8,0,0" />
                 </StackPanel>

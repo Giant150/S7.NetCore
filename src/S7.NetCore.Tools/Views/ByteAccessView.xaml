@@ -63,9 +63,9 @@
                         <TextBlock Text="{Binding ReturnedLengthText}" />
                     </StackPanel>
                     <TextBlock Text="十六进制" Margin="0,8,0,2" />
-                    <TextBox Text="{Binding ResultHex}" IsReadOnly="True" Height="90" FontFamily="Consolas" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
+                    <TextBox Text="{Binding ResultHex, Mode=OneWay}" IsReadOnly="True" Height="90" FontFamily="Consolas" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" />
                     <TextBlock Text="ASCII 预览" Margin="0,8,0,2" />
-                    <TextBox Text="{Binding ResultAscii}" IsReadOnly="True" Height="46" FontFamily="Consolas" />
+                    <TextBox Text="{Binding ResultAscii, Mode=OneWay}" IsReadOnly="True" Height="46" FontFamily="Consolas" />
                     <TextBlock Text="{Binding StatusText}" Margin="0,8,0,0" />
                     <TextBlock Text="{Binding RecoveryText}" Foreground="#555" />
                     <TextBlock Text="{Binding ErrorText}" Foreground="#C62828" TextWrapping="Wrap" />

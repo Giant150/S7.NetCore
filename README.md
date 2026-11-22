@@ -383,6 +383,9 @@ pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifact
 dotnet run --project src/S7.NetCore.Tools -c Debug
 ```
 
+- 工具项目显式设置 `<InvariantGlobalization>false</InvariantGlobalization>`：WPF 绑定与 `XmlLanguage` 需要可用区域性数据，不能继承根目录的 invariant globalization 设置。
+- 结果区只读 `TextBox` 使用 `Mode=OneWay`，避免 WPF 默认 TwoWay 绑定到只读属性导致启动异常。
+
 首版不包含结构体读写、轮询监控、日志导出/诊断包、配置档案持久化；不新增工具测试工程。手动验收 M1～M15 需要真实或虚拟 PLC 并交互操作，本环境未执行。
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
@@ -427,7 +430,7 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
 | 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；启动后窗口保持运行（4 秒冒烟） |
+| WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；主窗口标题/句柄存在，异常日志为空（6 秒冒烟） |
 | WPF 手动验收 M1～M15 | **未执行**（需要真实/虚拟 PLC 与交互式 UI） |
 | 全量测试 | 363 项全部通过（Release / net10.0） |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |

@@ -1,3 +1,4 @@
+using System.IO;
 using System.Windows;
 using System.Windows.Threading;
 using S7.NetCore.Tools.Services;
@@ -39,9 +40,10 @@ public partial class App : Application
 
     private static void OnDispatcherUnhandledException(object sender, DispatcherUnhandledExceptionEventArgs e)
     {
+        LogException(e.Exception);
         MessageBox.Show(
             $"发生未处理异常：{e.Exception.Message}",
-            "S7.NetCore 调试工具",
+            "未处理异常",
             MessageBoxButton.OK,
             MessageBoxImage.Error);
         e.Handled = true;
@@ -49,6 +51,20 @@ public partial class App : Application
 
     private static void OnUnobservedTaskException(object? sender, UnobservedTaskExceptionEventArgs e)
     {
+        LogException(e.Exception);
         e.SetObserved();
+    }
+
+    private static void LogException(Exception exception)
+    {
+        try
+        {
+            File.AppendAllText(
+                Path.Combine(Path.GetTempPath(), "S7.NetCore.Tools.error.log"),
+                $"{DateTimeOffset.Now:O}{Environment.NewLine}{exception}{Environment.NewLine}{Environment.NewLine}");
+        }
+        catch
+        {
+        }
     }
 }
