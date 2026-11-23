@@ -144,7 +144,7 @@ public readonly struct S7Value
     public static S7Value FromString(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return new S7Value(ValueKind.String, S7DataType.S7String, stringValue: value);
+        return new S7Value(ValueKind.String, S7DataType.String, stringValue: value);
     }
 
     /// <summary>
