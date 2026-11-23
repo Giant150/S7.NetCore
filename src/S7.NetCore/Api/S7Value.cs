@@ -144,7 +144,30 @@ public readonly struct S7Value
     public static S7Value FromString(string value)
     {
         ArgumentNullException.ThrowIfNull(value);
-        return new S7Value(ValueKind.String, S7DataType.String, stringValue: value);
+        return new S7Value(ValueKind.String, S7DataType.S7String, stringValue: value);
+    }
+
+    /// <summary>
+    /// 构造值
+    /// </summary>
+    /// <typeparam name="T">类型</typeparam>
+    /// <param name="value">值</param>
+    /// <returns></returns>
+    /// <exception cref="InvalidOperationException"></exception>
+    public static S7Value FromValue<T>(T value)
+    {
+        if (value is bool boolVal) return FromBool(boolVal);
+        else if (value is byte byteVal) return FromByte(byteVal);
+        else if(value is short shortVal) return FromInt16(shortVal);
+        else if (value is ushort ushortVal) return FromUInt16(ushortVal);
+        else if (value is int intVal) return FromInt32(intVal);
+        else if (value is uint uintVal) return FromUInt32(uintVal);
+        else if (value is long longVal) return FromInt64(longVal);
+        else if (value is ulong ulongVal) return FromUInt64(ulongVal);
+        else if (value is float floatVal) return FromSingle(floatVal);
+        else if (value is double doubleVal) return FromDouble(doubleVal);
+        else if (value is string stringVal) return FromString(stringVal);
+        else throw new InvalidOperationException($"不支持的类型 {typeof(T)}。");
     }
 
     /// <summary>获取布尔值。</summary>
@@ -217,6 +240,29 @@ public readonly struct S7Value
     public string AsString()
     {
         return _kind == ValueKind.String ? _stringValue! : throw Mismatch("String");
+    }
+
+    /// <summary>
+    /// 获取对应值
+    /// </summary>
+    /// <typeparam name="T">类型</typeparam>
+    /// <returns></returns>
+    /// <exception cref="InvalidOperationException"></exception>
+    public T As<T>()
+    {
+        return typeof(T) switch
+        {
+            Type t when t == typeof(bool) => (T)(object)AsBoolean(),
+            Type t when t == typeof(byte) => (T)(object)AsByte(),
+            Type t when t == typeof(short) => (T)(object)AsInt16(),
+            Type t when t == typeof(ushort) => (T)(object)AsUInt16(),
+            Type t when t == typeof(int) => (T)(object)AsInt32(),
+            Type t when t == typeof(uint) => (T)(object)AsUInt32(),
+            Type t when t == typeof(float) => (T)(object)AsSingle(),
+            Type t when t == typeof(double) => (T)(object)AsDouble(),
+            Type t when t == typeof(string) => (T)(object)AsString(),
+            _ => throw new InvalidOperationException($"不支持的类型 {typeof(T)}。")
+        };
     }
 
     internal bool IsBoolean => _kind == ValueKind.Boolean;
