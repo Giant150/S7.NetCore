@@ -251,7 +251,7 @@ internal static class S7ValueCodec
         ReadOnlySpan<byte> content = data.Slice(2, length);
         EnsureAscii(content);
 
-        return S7Value.FromString(Encoding.ASCII.GetString(content));
+        return S7Value.FromS7String(Encoding.ASCII.GetString(content));
     }
 
     private static S7Value DecodeS7WString(ReadOnlySpan<byte> data, int capacity)
@@ -310,7 +310,7 @@ internal static class S7ValueCodec
 
         if (declaredLength == 0)
         {
-            return S7Value.FromString(string.Empty);
+            return S7Value.FromS7WString(string.Empty);
         }
 
         char[] chars = new char[declaredLength];
@@ -349,7 +349,7 @@ internal static class S7ValueCodec
             }
         }
 
-        return S7Value.FromString(new string(chars));
+        return S7Value.FromS7WString(new string(chars));
     }
 
     private static S7ClientException InvalidWStringHeader(

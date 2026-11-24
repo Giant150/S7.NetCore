@@ -5,7 +5,7 @@ namespace S7.NetCore.Internal;
 /// <summary>
 /// S7 会话：状态机、超时编排、分包读写、结果装配与可选断线自动重连。
 /// </summary>
-internal sealed class S7Session : IAsyncDisposable
+internal sealed partial class S7Session : IAsyncDisposable
 {
     private readonly S7ConnectionOptions _options;
     private readonly S7ReconnectPolicy _reconnect;

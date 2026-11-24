@@ -103,6 +103,30 @@ public readonly record struct S7LogEntry
 
     /// <summary>结构体映射字段数；仅结构体读写条目填充。</summary>
     public int? MappedFieldCount { get; init; }
+
+    /// <summary>批量条目数；仅批量操作填充。</summary>
+    public int? ItemCount { get; init; }
+
+    /// <summary>批量成功条目数；仅批量操作填充。</summary>
+    public int? SucceededItemCount { get; init; }
+
+    /// <summary>批量失败条目数；仅批量操作填充。</summary>
+    public int? FailedItemCount { get; init; }
+
+    /// <summary>批量数据总字节数；仅批量操作填充。</summary>
+    public int? TotalDataBytes { get; init; }
+
+    /// <summary>当前失败条目索引；仅批量条目级日志填充。</summary>
+    public int? ItemIndex { get; init; }
+
+    /// <summary>超限时所需净荷字节数；仅批量超限日志填充。</summary>
+    public int? RequiredBytes { get; init; }
+
+    /// <summary>超限时当前 PDU；仅批量超限日志填充。</summary>
+    public int? PduLimit { get; init; }
+
+    /// <summary>条目数超限时的协议上限；仅批量超限日志填充。</summary>
+    public int? ItemCountLimit { get; init; }
 }
 
 /// <summary>

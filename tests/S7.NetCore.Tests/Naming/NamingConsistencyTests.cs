@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Security.Cryptography;
+using System.Text.RegularExpressions;
 using S7.NetCore;
 
 namespace S7.NetCore.Tests.Naming;
@@ -224,14 +225,20 @@ public sealed class NamingConsistencyTests
     }
 
     [Fact]
-    public void N15_VersionIsMajor3()
+    public void N15_VersionMatchesBuildConfig()
     {
         string props = File.ReadAllText(Path.Combine(Root, "Directory.Build.props"));
-        Assert.Contains("<VersionPrefix>3.0.0</VersionPrefix>", props, StringComparison.Ordinal);
+        Match match = Regex.Match(props, "<VersionPrefix>([^<]+)</VersionPrefix>");
 
+        Assert.True(match.Success, "N-15 FAIL: Directory.Build.props 缺少 VersionPrefix");
+        Assert.Single(Regex.Matches(props, "<VersionPrefix>"));
+
+        Version expected = Version.Parse(match.Groups[1].Value);
         Version? version = typeof(S7Client).Assembly.GetName().Version;
         Assert.NotNull(version);
-        Assert.Equal(3, version!.Major);
+        Assert.Equal(expected.Major, version!.Major);
+        Assert.Equal(expected.Minor, version.Minor);
+        Assert.Equal(expected.Build, version.Build);
     }
 
     [Fact]

@@ -23,7 +23,7 @@
   pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
 
 .EXAMPLE
-  pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.3.0.0.nupkg
+  pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.4.0.0.nupkg
 
 .NOTES
   退出码：0 通过；1 校验失败；2 参数或配置非法。

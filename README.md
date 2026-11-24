@@ -19,12 +19,13 @@
 
 - 会话建立与关闭：TCP → COTP（CR/CC）→ S7 通讯设置与 PDU 协商
 - 存储区域原始字节读写：过程输入区（I）、过程输出区（Q）、位存储区（M）、数据块区（DB）
-- 超 PDU 自动分包：读取按 `PDU − 18`、写入按 `PDU − 35` 拆分
+- 超 PDU 自动分包：读取按 `PDU − 18`、写入按 `PDU − 28` 拆分（S7 净荷口径，不含 TPKT 4 + COTP 3 头；实际帧长再加 7 字节）
 - 读取全有或全无；写入失败/取消可精确上报已写字节数与区间
 - 取消不破坏会话（迟到响应清理）；连接/读/写超时独立可配
 - 地址表达式解析：`DB1.DBW0`、`DB1.DBB0`、`DB1.DBD0`、`DB1.DBX0.3`、`MW10`、`Q0.3` 等
 - 十一种类型转换：Bool、Byte、Word、Int、DWord、DInt、Real、LReal、String、S7String、S7WString
 - 类型化读写与单请求位写（只改变目标位，1 次往返）
+- 单请求多条目批量读写：字节视图 `ReadBatchAsync`/`WriteBatchAsync` 与类型化视图 `ReadTypedBatchAsync`/`WriteTypedBatchAsync`，一次调用只产生 1 个请求帧与 1 个响应帧；条目数由当前协商 PDU 容量与协议 1 字节计数字段（255）共同决定，超出整批拒绝并由调用方按容量分组；部分失败默认不抛异常
 - 扁平结构体读写：公共实例字段按声明顺序连续映射，支持数值与带容量标注的字符串字段
 - 统一错误模型（六类错误 + 稳定错误码 + PLC 原始返回码）
 - 结构化诊断日志、可选帧级协议跟踪、日志失败隔离
@@ -35,7 +36,6 @@
 
 - DateTime、嵌套结构体/UDT、数组与嵌套类型
 - 符号寻址与变量表导入
-- 一次请求中的多变量批量读写
 - Timer / Counter 区域
 - PLC 时钟、SZL、块列表/上传/下载、CPU 启停
 - PLC 服务端模拟、连接池
@@ -232,6 +232,98 @@ catch (S7ClientException ex)
 - `DisconnectAsync` 幂等；`Faulted` 状态下读写返回 `SessionFaulted`，需显式断开后重连
 - 默认不自动重连；启用 `Reconnect` 后按策略恢复。重连期间读写等待窗口到期返回 `SessionReconnecting`(204)，重连耗尽返回 `ReconnectExhausted`(604)，被显式断开或客户端释放中止返回 `ReconnectAborted`(605)
 
+## 批量读写
+
+一次批量调用只使用一个请求帧与一个响应帧，全部条目在发送前完成校验。条目数由当前协商 PDU 容量与协议 1 字节计数字段（255）共同决定；本地不做自动拆批、分组或截断，超限时整批拒绝，由调用方按容量自行分组。
+
+字节视图：
+
+```csharp
+S7BatchReadResult bytes = await client.ReadBatchAsync(
+[
+    new S7BatchReadItem(S7Area.DataBlock, 1, 0, 32),
+    new S7BatchReadItem(S7Area.Memory, 0, 0, 16),
+    new S7BatchReadItem(S7Area.Output, 0, 0, 8)
+]);
+
+foreach (S7BatchReadItemResult item in bytes.Items)
+{
+    Console.WriteLine($"#{item.Index} ok={item.Succeeded} bytes={item.Data.Length}");
+}
+
+foreach (S7BatchItemFailure failure in bytes.Failures)
+{
+    string plcCode = failure.PlcReturnCode is byte code ? code.ToString("X2") : "-";
+    Console.WriteLine($"失败 #{failure.Index} {failure.ErrorCode} PLC={plcCode}");
+}
+
+// 需要“全成功否则抛 144”时使用便利出口
+bytes.EnsureAllSucceeded();
+```
+
+类型化视图：
+
+```csharp
+S7TypedBatchReadResult values = await client.ReadTypedBatchAsync(
+[
+    new S7TypedReadBatchItem("DB1.DBW0", S7DataType.Int),
+    new S7TypedReadBatchItem("DB1.DBD4", S7DataType.Real),
+    new S7TypedReadBatchItem("DB1.DBX8.3", S7DataType.Bool),
+    new S7TypedReadBatchItem("DB1.DBB200", S7DataType.S7String, Capacity: 16)
+]);
+
+short speed = values.Items[0].Value.AsInt16();
+string name = values.Items[3].Value.AsString();
+
+S7TypedBatchWriteResult written = await client.WriteTypedBatchAsync(
+[
+    new S7TypedWriteBatchItem("DB2.DBW0", S7DataType.Int, S7Value.FromInt16(1500)),
+    new S7TypedWriteBatchItem("DB2.DBX4.2", S7DataType.Bool, S7Value.FromBool(true))
+]);
+```
+
+容量口径（均为 S7 净荷字节，不含 TPKT 4 + COTP 3 头）：
+
+| 方向 | 所需净荷 |
+|------|----------|
+| 读请求 | `12 + 12N` |
+| 读响应 | `14 + Σ(4 + A(D))`（每项结果头 4 字节） |
+| 写请求 | `12 + Σ(16 + A(D))` |
+| 写响应 | `14 + N`（恒小于写请求侧，无需单独估算） |
+
+`A(D) = D + (D & 1)` 为偶数对齐。条目数为 0 返回 `BatchItemsEmpty`(141)；超过 255 条返回 `BatchItemCountExceeded`(146)；所需净荷超出当前 PDU 返回 `BatchPduExceeded`(142)。上述拒绝都发生在发送前，零报文、零写入。
+
+按 PDU 自行分组示例：
+
+```csharp
+const int pduBudget = 430; // 保守预留后可用于批量读响应的净荷
+var group = new List<S7BatchReadItem>();
+int required = 14;
+
+foreach (S7BatchReadItem item in items)
+{
+    int itemCost = 4 + item.Length + (item.Length & 1);
+    if (group.Count > 0 && required + itemCost > pduBudget)
+    {
+        await client.ReadBatchAsync(group);
+        group.Clear();
+        required = 14;
+    }
+
+    group.Add(item);
+    required += itemCost;
+}
+
+if (group.Count > 0)
+{
+    await client.ReadBatchAsync(group);
+}
+```
+
+- 部分失败默认不抛异常：逐条返回 `Succeeded` / `ErrorCode` / `PlcReturnCode`，整批 `Failures` 按索引升序；`EnsureAllSucceeded()` 仅在需要「全成功」语义时抛 `BatchItemFailed`(144)，并携带失败明细、`SucceededItemCount` 与已写字节。
+- 批量写条目目标字节区间不得重叠（含两个位条目落在同一字节）；冲突返回 `BatchAddressConflict`(143)，首尾相接不视为冲突。读条目允许重复或重叠，逐条独立返回。
+- 位条目写入的已写字节按 1 计；批量不做回读校验。结果对象的 `RecoveryCount` / `Retried` 与单点一致，`ReplayAttempted` / `ReplayedBytes` 仅写侧提供。
+
 ## 结构体读写
 
 结构体读写只映射公共实例字段，按声明顺序连续排布，不使用运行时对齐填充。字段类型限定为九种；`bool` 固定占 1 字节（读回非零即真）。
@@ -365,7 +457,7 @@ dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.
 
 # 校验四框架产物与 NuGet 包
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
-pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.3.0.0.nupkg
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.4.0.0.nupkg
 ```
 
 ## WPF 调试工具（S7.NetCore.Tools）
@@ -386,7 +478,7 @@ dotnet run --project src/S7.NetCore.Tools -c Debug
 - 工具项目显式设置 `<InvariantGlobalization>false</InvariantGlobalization>`：WPF 绑定与 `XmlLanguage` 需要可用区域性数据，不能继承根目录的 invariant globalization 设置。
 - 结果区只读 `TextBox` 使用 `Mode=OneWay`，避免 WPF 默认 TwoWay 绑定到只读属性导致启动异常。
 
-首版不包含结构体读写、轮询监控、日志导出/诊断包、配置档案持久化；不新增工具测试工程。手动验收 M1～M15 需要真实或虚拟 PLC 并交互操作，本环境未执行。
+首版不包含结构体读写、批量读写页面、轮询监控、日志导出/诊断包、配置档案持久化；不新增工具测试工程。批量能力只通过库公开 API 使用，不提供 WPF 批量页。手动验收 M1～M15 需要真实或虚拟 PLC 并交互操作，本环境未执行。
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
 
@@ -432,8 +524,10 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
 | WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；主窗口标题/句柄存在，异常日志为空（6 秒冒烟） |
 | WPF 手动验收 M1～M15 | **未执行**（需要真实/虚拟 PLC 与交互式 UI） |
-| 全量测试 | 363 项全部通过（Release / net10.0） |
-| 版本 3.0.0 | `VersionPrefix`、程序集版本与包版本均为 `3.0.0`；包标识为 `SiemensS7.NetCore`；`SiemensS7.NetCore.3.0.0.nupkg` 与 `.snupkg` 生成并通过四框架资产/依赖校验 |
+| 全量测试 | 468 项全部通过（Release / net10.0） |
+| 版本 4.0.0 | `VersionPrefix` = `4.0.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.4.0.0.nupkg` / `.snupkg` |
+| 批量读写用例 | 新增 88 项：容量边界、写重叠、请求校验、多条目协议编解码、结果装配、字节/类型化门面端到端、超时/取消/断线恢复与整批重放 |
+| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `4.0.0` |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
@@ -461,15 +555,21 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 - DateTime、嵌套结构体/UDT、数组与嵌套类型
 - 符号寻址与变量表导入
-- 多变量打包读写
 - Timer / Counter 区域
 - PLC 时钟、SZL 与块操作
 - 连接池与多会话并发
 
 ## 变更记录与迁移
 
+### 迁移说明（旧写法 → 当前写法）
+
+- 泛型取值：旧写法 `As<T>()` 改为 `ToValue<T>()`；`TryToValue<T>(out T)` 与 `ToValue<T>()` 并存，不保留别名。`ToValue<long>` / `ToValue<ulong>` 受支持，可空目标（如 `ToValue<int?>`）仍不支持；九个强类型访问器（`AsBoolean`、`AsByte`、`AsInt16`、`AsUInt16`、`AsInt32`、`AsUInt32`、`AsSingle`、`AsDouble`、`AsString`）保持不变。
+- 字符串判定：`DataType == S7DataType.String` 改为 `IsStringValue`；需要区分 `String` / `S7String` / `S7WString` 时使用 `StringEncoding`。
+- 批量读写为新增 API，不改动既有单点读写的公开签名与错误语义。
+
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 4.0.0 | 2026-11-24 | 新增公开批量读写 API：字节视图 `ReadBatchAsync`/`WriteBatchAsync` 与类型化视图 `ReadTypedBatchAsync`/`WriteTypedBatchAsync`，一次批量调用 = 1 个请求帧 + 1 个响应帧；条目数由当前 PDU 与协议 255 计数字段决定，超限整批拒绝并由调用方分组（PDU 超限 142、条目数超限 146）；部分失败默认不抛异常，`EnsureAllSucceeded()` 为可选出口；批量写条目目标区间重叠禁止（143）；新增 `S7BatchReadItem`/`S7BatchWriteItem`/`S7TypedReadBatchItem`/`S7TypedWriteBatchItem` 与对应结果类型、`S7BatchItemFailure`、错误码 141～146；除已声明的 `As<T>()` → `ToValue<T>` 迁移与字符串标注精确化外，既有 API 不变；单点读取内部实现（含 `S7Value` 承载）允许变更但对外契约不变；字符串结果标注精确化为 `String`/`S7String`/`S7WString`（`StringEncoding`），`S7Value` 承载扩展为已声明行为变更；主版本升级对应上述新增与行为变更 |
 | 3.0.0 | 2026-11-22 | 版本号跨主版本提升至 3.0.0（主版本 2 → 3）；包版本与程序集版本同步为 3.0.0；NuGet 包标识经用户确认回退为 `SiemensS7.NetCore`（第一轮 `Siemens.S7.NetCore` 停止使用，不再发布新版本），包文件为 `SiemensS7.NetCore.3.0.0.nupkg` / `.snupkg`；项目名称、程序集名与根命名空间保持不变 |
 | 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140）；新增 `S7.NetCore.Tools` WPF 调试工具首版（连接/字节/类型化/日志/自动重连 UI，`net10.0-windows`） |
 | 2.0.0 | 2026-11-21 | 项目、程序集与根命名空间由 `Snap7.NetCore` 统一重命名为 `S7.NetCore`；解决方案、测试项目与工具脚本同步更新，生产程序集保持零原生依赖 |

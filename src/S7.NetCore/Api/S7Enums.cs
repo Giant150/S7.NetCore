@@ -297,5 +297,23 @@ public enum S7ErrorCode
     /// 结构体地址不受支持（非 DB 区、非 DBB 宽度、带位号或 DB 号小于 1）。
     /// 类别 InvalidArgument，阶段 Validate。
     /// </summary>
-    StructAddressNotSupported = 140
+    StructAddressNotSupported = 140,
+
+    /// <summary>批量清单为空。类别 InvalidArgument，阶段 Validate。</summary>
+    BatchItemsEmpty = 141,
+
+    /// <summary>批量所需净荷超出当前协商 PDU。类别 InvalidArgument，阶段 Validate。</summary>
+    BatchPduExceeded = 142,
+
+    /// <summary>批量写条目目标字节区间重叠。类别 InvalidArgument，阶段 Validate。</summary>
+    BatchAddressConflict = 143,
+
+    /// <summary>批量便利出口检测到失败条目。类别 PlcReturn，阶段 Read/Write。</summary>
+    BatchItemFailed = 144,
+
+    /// <summary>批量条目组合不受支持。类别 InvalidArgument，阶段 Validate。</summary>
+    BatchItemUnsupported = 145,
+
+    /// <summary>批量条目数超过协议计数字段上限 255。类别 InvalidArgument，阶段 Validate。</summary>
+    BatchItemCountExceeded = 146
 }

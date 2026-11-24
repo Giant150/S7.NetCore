@@ -149,6 +149,35 @@ public readonly struct S7Value
         return new S7Value(ValueKind.String, S7DataType.String, stringValue: value);
     }
 
+    /// <summary>构造带 S7String 编码标注的字符串值。</summary>
+    /// <param name="value">字符串值，不得为 <see langword="null"/>。</param>
+    /// <returns>承载种类为字符串、标注为 <see cref="S7DataType.S7String"/> 的值。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> 为 <see langword="null"/>。</exception>
+    public static S7Value FromS7String(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new S7Value(ValueKind.String, S7DataType.S7String, stringValue: value);
+    }
+
+    /// <summary>构造带 S7WString 编码标注的字符串值。</summary>
+    /// <param name="value">字符串值，不得为 <see langword="null"/>。</param>
+    /// <returns>承载种类为字符串、标注为 <see cref="S7DataType.S7WString"/> 的值。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> 为 <see langword="null"/>。</exception>
+    public static S7Value FromS7WString(string value)
+    {
+        ArgumentNullException.ThrowIfNull(value);
+        return new S7Value(ValueKind.String, S7DataType.S7WString, stringValue: value);
+    }
+
+    /// <summary>值是否以字符串种类承载（String/S7String/S7WString 均为真）。</summary>
+    public bool IsStringValue => _kind == ValueKind.String;
+
+    /// <summary>
+    /// 字符串编码标注；非字符串为 <see langword="null"/>。
+    /// 返回 <see cref="S7DataType.String"/>、<see cref="S7DataType.S7String"/> 或 <see cref="S7DataType.S7WString"/>。
+    /// </summary>
+    public S7DataType? StringEncoding => _kind == ValueKind.String ? _dataType : null;
+
     /// <summary>
     /// 按类型参数构造值对象，支持十一种承载类型、<see cref="object"/> 运行时类型识别与非空可空值类型。
     /// </summary>

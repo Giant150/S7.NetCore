@@ -97,7 +97,7 @@ public sealed class ProtocolParsingTests
 
         Assert.Equal(expectedEffective, negotiation.Effective);
         Assert.Equal(expectedEffective - 18, negotiation.ReadPayloadLimit);
-        Assert.Equal(expectedEffective - 35, negotiation.WritePayloadLimit);
+        Assert.Equal(expectedEffective - ProtocolConstants.WriteRequestPayloadOverhead, negotiation.WritePayloadLimit);
     }
 
     [Theory]

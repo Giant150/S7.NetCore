@@ -17,14 +17,44 @@ internal static class ProtocolConstants
     /// <summary>S7 Ack_Data 响应头长度。</summary>
     internal const int S7AckHeaderSize = 12;
 
+    /// <summary>S7 Job 净荷头长度（S7 头 10 + 功能码 1 + 条目计数 1）。</summary>
+    internal const int S7JobPayloadHeaderSize = S7JobHeaderSize + 2;
+
+    /// <summary>单条读/写参数条目头长度。</summary>
+    internal const int ReadItemHeaderSize = 12;
+
+    /// <summary>写数据条目头长度。</summary>
+    internal const int WriteItemDataHeaderSize = 4;
+
+    /// <summary>S7 Ack 净荷头长度（Ack 头 12 + 功能码 1 + 条目计数 1）。</summary>
+    internal const int S7AckPayloadHeaderSize = S7AckHeaderSize + 2;
+
+    /// <summary>读响应每项结果头长度（返回码 1 + 传输尺寸 1 + 长度 2）。</summary>
+    internal const int ReadItemResultHeaderSize = 4;
+
+    /// <summary>写响应每项结果码长度。</summary>
+    internal const int WriteItemResultCodeSize = 1;
+
+    /// <summary>单条读请求净荷固定开销（Job 净荷头 + 条目头）。</summary>
+    internal const int ReadRequestPayloadOverhead = S7JobPayloadHeaderSize + ReadItemHeaderSize;
+
+    /// <summary>单条读响应净荷固定开销（Ack 净荷头 + 单项结果头）。</summary>
+    internal const int ReadResponseOverhead = S7AckPayloadHeaderSize + ReadItemResultHeaderSize;
+
+    /// <summary>单条写请求净荷固定开销（Job 净荷头 + 条目头 + 数据头）。</summary>
+    internal const int WriteRequestPayloadOverhead = S7JobPayloadHeaderSize + ReadItemHeaderSize + WriteItemDataHeaderSize;
+
+    /// <summary>单条写响应净荷固定开销（Ack 净荷头，每项另计 1 字节返回码）。</summary>
+    internal const int WriteResponsePayloadOverhead = S7AckPayloadHeaderSize;
+
     /// <summary>单条读请求完整帧长度。</summary>
-    internal const int ReadRequestFrameSize = 31;
+    internal const int ReadRequestFrameSize = TpktHeaderSize + CotpDataHeaderSize + ReadRequestPayloadOverhead;
 
-    /// <summary>读响应 S7 净荷固定开销（响应头 12 + 参数头 2 + 单项结果头 4）。</summary>
-    internal const int ReadResponseOverhead = 18;
+    /// <summary>写请求完整帧固定开销（TPKT + COTP + 写请求净荷开销）。</summary>
+    internal const int WriteRequestOverhead = TpktHeaderSize + CotpDataHeaderSize + WriteRequestPayloadOverhead;
 
-    /// <summary>写请求完整帧固定开销（TPKT + COTP + S7 头 + 写参数 + 数据头）。</summary>
-    internal const int WriteRequestOverhead = 35;
+    /// <summary>协议条目计数字段可表达的最大条目数。</summary>
+    internal const int MaxBatchItemCount = 255;
 
     /// <summary>最小 PDU 大小。</summary>
     internal const int MinPduSize = 240;

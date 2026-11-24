@@ -12,5 +12,5 @@ internal readonly record struct PduNegotiation(int Requested, int Confirmed, int
     internal int ReadPayloadLimit => Effective - ProtocolConstants.ReadResponseOverhead;
 
     /// <summary>单次写入净荷上限。</summary>
-    internal int WritePayloadLimit => Effective - ProtocolConstants.WriteRequestOverhead;
+    internal int WritePayloadLimit => Effective - ProtocolConstants.WriteRequestPayloadOverhead;
 }

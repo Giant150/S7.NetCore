@@ -15,7 +15,9 @@ public sealed class S7ClientException : Exception
         int bytesWritten = 0,
         WrittenRange? writtenRange = null,
         bool writeOutcomeUncertain = false,
-        Exception? innerException = null)
+        Exception? innerException = null,
+        IReadOnlyList<S7BatchItemFailure>? batchFailedItems = null,
+        int succeededItemCount = 0)
         : base(message, innerException)
     {
         Category = category;
@@ -25,6 +27,8 @@ public sealed class S7ClientException : Exception
         BytesWritten = bytesWritten;
         WrittenRange = writtenRange;
         WriteOutcomeUncertain = writeOutcomeUncertain;
+        BatchFailedItems = batchFailedItems ?? Array.Empty<S7BatchItemFailure>();
+        SucceededItemCount = succeededItemCount;
     }
 
     /// <summary>错误类别。</summary>
@@ -48,6 +52,12 @@ public sealed class S7ClientException : Exception
     /// <summary>写入结果是否不确定（例如写超时后 PLC 可能已执行写入）。</summary>
     public bool WriteOutcomeUncertain { get; }
 
+    /// <summary>批量操作中失败条目的明细；非批量异常为空集合。</summary>
+    public IReadOnlyList<S7BatchItemFailure> BatchFailedItems { get; }
+
+    /// <summary>批量操作中成功条目数；非批量异常为 0。</summary>
+    public int SucceededItemCount { get; }
+
     /// <summary>
     /// 生成追加上下文后缀的新异常，逐项保留类别、错误码、阶段、PLC 返回码与写入进度。
     /// </summary>
@@ -64,6 +74,8 @@ public sealed class S7ClientException : Exception
             BytesWritten,
             WrittenRange,
             WriteOutcomeUncertain,
-            InnerException);
+            InnerException,
+            BatchFailedItems,
+            SucceededItemCount);
     }
 }

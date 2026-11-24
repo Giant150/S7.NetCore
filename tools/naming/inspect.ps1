@@ -53,7 +53,10 @@ $migrationIndex = $readme.IndexOf('## 变更记录与迁移')
 Check 'N-13b' ($migrationIndex -gt 0 -and -not $readme.Substring(0, $migrationIndex).Contains('Snap7.NetCore')) 'README 白名单外存在旧名'
 
 $props = Get-Content -Raw -LiteralPath (Join-Path $root 'Directory.Build.props')
-Check 'N-15' ($props.Contains('<VersionPrefix>3.0.0</VersionPrefix>')) '版本声明缺失或不是 3.0.0'
+$versionMatches = @([regex]::Matches($props, '<VersionPrefix>([^<]+)</VersionPrefix>'))
+Check 'N-15' ($versionMatches.Count -eq 1) "VersionPrefix 必须且只能声明一次（实际 $($versionMatches.Count) 次）"
+$versionPrefix = if ($versionMatches.Count -eq 1) { $versionMatches[0].Groups[1].Value } else { '' }
+Check 'N-15b' ($versionPrefix -match '^\d+\.\d+\.\d+$') "VersionPrefix 缺失或格式非法：'$versionPrefix'"
 
 $outputDir = Join-Path $root 'src/S7.NetCore/bin/Debug/net10.0'
 Check 'N-12' ((Test-Path (Join-Path $outputDir 'S7.NetCore.dll')) -or -not (Test-Path $outputDir)) 'Debug 输出缺少 S7.NetCore.dll'
