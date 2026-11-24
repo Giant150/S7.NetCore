@@ -1,3 +1,5 @@
+﻿using System.Runtime.CompilerServices;
+
 namespace S7.NetCore;
 
 /// <summary>
@@ -148,26 +150,72 @@ public readonly struct S7Value
     }
 
     /// <summary>
-    /// 构造值
+    /// 按类型参数构造值对象，支持十一种承载类型、<see cref="object"/> 运行时类型识别与非空可空值类型。
     /// </summary>
-    /// <typeparam name="T">类型</typeparam>
-    /// <param name="value">值</param>
-    /// <returns></returns>
-    /// <exception cref="InvalidOperationException"></exception>
+    /// <typeparam name="T">
+    /// 承载类型（<see cref="bool"/>、<see cref="byte"/>、<see cref="short"/>、<see cref="ushort"/>、
+    /// <see cref="int"/>、<see cref="uint"/>、<see cref="long"/>、<see cref="ulong"/>、<see cref="float"/>、
+    /// <see cref="double"/>、<see cref="string"/>）、<see cref="object"/> 或非空可空值类型。
+    /// <see cref="Nullable{T}"/> 仅允许在构造侧以非空值出现，不作为取值目标。
+    /// </typeparam>
+    /// <param name="value">待构造的值，不得为 <see langword="null"/>。</param>
+    /// <returns>类型标注与对应强类型工厂一致的值对象。</returns>
+    /// <exception cref="ArgumentNullException"><paramref name="value"/> 为 <see langword="null"/>。</exception>
+    /// <exception cref="InvalidOperationException"><typeparamref name="T"/> 或运行时值不是支持的承载类型。</exception>
     public static S7Value FromValue<T>(T value)
     {
-        if (value is bool boolVal) return FromBool(boolVal);
-        else if (value is byte byteVal) return FromByte(byteVal);
-        else if(value is short shortVal) return FromInt16(shortVal);
-        else if (value is ushort ushortVal) return FromUInt16(ushortVal);
-        else if (value is int intVal) return FromInt32(intVal);
-        else if (value is uint uintVal) return FromUInt32(uintVal);
-        else if (value is long longVal) return FromInt64(longVal);
-        else if (value is ulong ulongVal) return FromUInt64(ulongVal);
-        else if (value is float floatVal) return FromSingle(floatVal);
-        else if (value is double doubleVal) return FromDouble(doubleVal);
-        else if (value is string stringVal) return FromString(stringVal);
-        else throw new InvalidOperationException($"不支持的类型 {typeof(T)}。");
+        if (typeof(T) == typeof(bool)) return FromBool(Unsafe.As<T, bool>(ref value));
+        if (typeof(T) == typeof(byte)) return FromByte(Unsafe.As<T, byte>(ref value));
+        if (typeof(T) == typeof(short)) return FromInt16(Unsafe.As<T, short>(ref value));
+        if (typeof(T) == typeof(ushort)) return FromUInt16(Unsafe.As<T, ushort>(ref value));
+        if (typeof(T) == typeof(int)) return FromInt32(Unsafe.As<T, int>(ref value));
+        if (typeof(T) == typeof(uint)) return FromUInt32(Unsafe.As<T, uint>(ref value));
+        if (typeof(T) == typeof(long)) return FromInt64(Unsafe.As<T, long>(ref value));
+        if (typeof(T) == typeof(ulong)) return FromUInt64(Unsafe.As<T, ulong>(ref value));
+        if (typeof(T) == typeof(float)) return FromSingle(Unsafe.As<T, float>(ref value));
+        if (typeof(T) == typeof(double)) return FromDouble(Unsafe.As<T, double>(ref value));
+
+        if (typeof(T) == typeof(string))
+        {
+            string? text = Unsafe.As<T, string>(ref value);
+            if (text is null) throw new ArgumentNullException(nameof(value));
+            return FromString(text);
+        }
+
+        if (typeof(T) == typeof(object))
+        {
+            object? boxed = Unsafe.As<T, object>(ref value);
+            if (boxed is null) throw new ArgumentNullException(nameof(value));
+            return FromObject(boxed);
+        }
+
+        if (Nullable.GetUnderlyingType(typeof(T)) is not null)
+        {
+            object? boxed = value;
+            if (boxed is null) throw new ArgumentNullException(nameof(value));
+            return FromObject(boxed);
+        }
+
+        throw new InvalidOperationException($"不支持的类型 {typeof(T)}。");
+    }
+
+    private static S7Value FromObject(object value)
+    {
+        return value switch
+        {
+            bool boolValue => FromBool(boolValue),
+            byte byteValue => FromByte(byteValue),
+            short shortValue => FromInt16(shortValue),
+            ushort ushortValue => FromUInt16(ushortValue),
+            int intValue => FromInt32(intValue),
+            uint uintValue => FromUInt32(uintValue),
+            long longValue => FromInt64(longValue),
+            ulong ulongValue => FromUInt64(ulongValue),
+            float floatValue => FromSingle(floatValue),
+            double doubleValue => FromDouble(doubleValue),
+            string stringValue => FromString(stringValue),
+            _ => throw new InvalidOperationException($"不支持的类型 {value.GetType()}。")
+        };
     }
 
     /// <summary>获取布尔值。</summary>
@@ -243,25 +291,249 @@ public readonly struct S7Value
     }
 
     /// <summary>
-    /// 获取对应值
+    /// 按构造来源种类取回与类型参数一致的 CLR 值（对应 <see cref="AsBoolean"/> 等强类型取值方法的泛型入口）。
     /// </summary>
-    /// <typeparam name="T">类型</typeparam>
-    /// <returns></returns>
-    /// <exception cref="InvalidOperationException"></exception>
-    public T As<T>()
+    /// <typeparam name="T">
+    /// 十一种承载类型之一：<see cref="bool"/>、<see cref="byte"/>、<see cref="short"/>、<see cref="ushort"/>、
+    /// <see cref="int"/>、<see cref="uint"/>、<see cref="long"/>、<see cref="ulong"/>、<see cref="float"/>、
+    /// <see cref="double"/>、<see cref="string"/>。
+    /// <see cref="Nullable{T}"/> 与 <see cref="object"/> 不受支持。
+    /// </typeparam>
+    /// <returns>与 <typeparamref name="T"/> 一致的值；字符串返回非空引用，空串为 <see cref="string.Empty"/>。</returns>
+    /// <exception cref="InvalidOperationException">
+    /// 目标类型不受支持、实例未承载值，或构造来源种类与 <typeparamref name="T"/> 严格不匹配。
+    /// </exception>
+    public T ToValue<T>()
     {
-        return typeof(T) switch
+        if (typeof(T) == typeof(bool)) return ToBoolean<T>();
+        if (typeof(T) == typeof(byte)) return ToByte<T>();
+        if (typeof(T) == typeof(short)) return ToInt16<T>();
+        if (typeof(T) == typeof(ushort)) return ToUInt16<T>();
+        if (typeof(T) == typeof(int)) return ToInt32<T>();
+        if (typeof(T) == typeof(uint)) return ToUInt32<T>();
+        if (typeof(T) == typeof(long)) return ToInt64<T>();
+        if (typeof(T) == typeof(ulong)) return ToUInt64<T>();
+        if (typeof(T) == typeof(float)) return ToSingle<T>();
+        if (typeof(T) == typeof(double)) return ToDouble<T>();
+        if (typeof(T) == typeof(string)) return ToStringValue<T>();
+        throw new InvalidOperationException($"不支持的类型 {typeof(T)}。");
+    }
+
+    /// <summary>
+    /// 探测式泛型取值。种类不匹配、实例未承载值或目标类型不受支持时返回 <see langword="false"/>，不抛出异常。
+    /// </summary>
+    /// <typeparam name="T">目标类型，取值口径与 <see cref="ToValue{T}"/> 一致。</typeparam>
+    /// <param name="value">
+    /// 成功时为取值结果；失败时为 <typeparamref name="T"/> 的默认值。
+    /// 字符串失败时输出 <see cref="string.Empty"/>；不受支持的类型（含 <see cref="Nullable{T}"/>）输出 <see langword="default"/>。
+    /// </param>
+    /// <returns>成功返回 <see langword="true"/>；否则返回 <see langword="false"/>。</returns>
+    public bool TryToValue<T>(out T value)
+    {
+        value = default!;
+        if (typeof(T) == typeof(bool))
         {
-            Type t when t == typeof(bool) => (T)(object)AsBoolean(),
-            Type t when t == typeof(byte) => (T)(object)AsByte(),
-            Type t when t == typeof(short) => (T)(object)AsInt16(),
-            Type t when t == typeof(ushort) => (T)(object)AsUInt16(),
-            Type t when t == typeof(int) => (T)(object)AsInt32(),
-            Type t when t == typeof(uint) => (T)(object)AsUInt32(),
-            Type t when t == typeof(float) => (T)(object)AsSingle(),
-            Type t when t == typeof(double) => (T)(object)AsDouble(),
-            Type t when t == typeof(string) => (T)(object)AsString(),
-            _ => throw new InvalidOperationException($"不支持的类型 {typeof(T)}。")
+            if (_kind != ValueKind.Boolean) return false;
+            bool boolValue = _booleanValue;
+            value = Unsafe.As<bool, T>(ref boolValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(byte))
+        {
+            if (_kind != ValueKind.Byte) return false;
+            byte byteValue = (byte)_unsignedValue;
+            value = Unsafe.As<byte, T>(ref byteValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(short))
+        {
+            if (_kind != ValueKind.Int16) return false;
+            short shortValue = (short)_signedValue;
+            value = Unsafe.As<short, T>(ref shortValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(ushort))
+        {
+            if (_kind != ValueKind.UInt16) return false;
+            ushort ushortValue = (ushort)_unsignedValue;
+            value = Unsafe.As<ushort, T>(ref ushortValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(int))
+        {
+            if (_kind != ValueKind.Int32) return false;
+            int intValue = (int)_signedValue;
+            value = Unsafe.As<int, T>(ref intValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(uint))
+        {
+            if (_kind != ValueKind.UInt32) return false;
+            uint uintValue = (uint)_unsignedValue;
+            value = Unsafe.As<uint, T>(ref uintValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(long))
+        {
+            if (_kind != ValueKind.Int64) return false;
+            long longValue = _signedValue;
+            value = Unsafe.As<long, T>(ref longValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(ulong))
+        {
+            if (_kind != ValueKind.UInt64) return false;
+            ulong ulongValue = _unsignedValue;
+            value = Unsafe.As<ulong, T>(ref ulongValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(float))
+        {
+            if (_kind != ValueKind.Single) return false;
+            float floatValue = _singleValue;
+            value = Unsafe.As<float, T>(ref floatValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(double))
+        {
+            if (_kind != ValueKind.Double) return false;
+            double doubleValue = _doubleValue;
+            value = Unsafe.As<double, T>(ref doubleValue);
+            return true;
+        }
+
+        if (typeof(T) == typeof(string))
+        {
+            if (_kind != ValueKind.String)
+            {
+                string empty = string.Empty;
+                value = Unsafe.As<string, T>(ref empty);
+                return false;
+            }
+
+            string text = _stringValue!;
+            value = Unsafe.As<string, T>(ref text);
+            return true;
+        }
+
+        return false;
+    }
+
+    private T ToBoolean<T>()
+    {
+        EnsureKind(ValueKind.Boolean);
+        bool value = _booleanValue;
+        return Unsafe.As<bool, T>(ref value);
+    }
+
+    private T ToByte<T>()
+    {
+        EnsureKind(ValueKind.Byte);
+        byte value = (byte)_unsignedValue;
+        return Unsafe.As<byte, T>(ref value);
+    }
+
+    private T ToInt16<T>()
+    {
+        EnsureKind(ValueKind.Int16);
+        short value = (short)_signedValue;
+        return Unsafe.As<short, T>(ref value);
+    }
+
+    private T ToUInt16<T>()
+    {
+        EnsureKind(ValueKind.UInt16);
+        ushort value = (ushort)_unsignedValue;
+        return Unsafe.As<ushort, T>(ref value);
+    }
+
+    private T ToInt32<T>()
+    {
+        EnsureKind(ValueKind.Int32);
+        int value = (int)_signedValue;
+        return Unsafe.As<int, T>(ref value);
+    }
+
+    private T ToUInt32<T>()
+    {
+        EnsureKind(ValueKind.UInt32);
+        uint value = (uint)_unsignedValue;
+        return Unsafe.As<uint, T>(ref value);
+    }
+
+    private T ToInt64<T>()
+    {
+        EnsureKind(ValueKind.Int64);
+        long value = _signedValue;
+        return Unsafe.As<long, T>(ref value);
+    }
+
+    private T ToUInt64<T>()
+    {
+        EnsureKind(ValueKind.UInt64);
+        ulong value = _unsignedValue;
+        return Unsafe.As<ulong, T>(ref value);
+    }
+
+    private T ToSingle<T>()
+    {
+        EnsureKind(ValueKind.Single);
+        float value = _singleValue;
+        return Unsafe.As<float, T>(ref value);
+    }
+
+    private T ToDouble<T>()
+    {
+        EnsureKind(ValueKind.Double);
+        double value = _doubleValue;
+        return Unsafe.As<double, T>(ref value);
+    }
+
+    private T ToStringValue<T>()
+    {
+        EnsureKind(ValueKind.String);
+        string value = _stringValue!;
+        return Unsafe.As<string, T>(ref value);
+    }
+
+    private void EnsureKind(ValueKind expected)
+    {
+        if (_kind == ValueKind.None)
+        {
+            throw new InvalidOperationException($"S7Value 未承载值，期望 {GetKindTypeName(expected)}。");
+        }
+
+        if (_kind != expected)
+        {
+            throw Mismatch(expected);
+        }
+    }
+
+    private static string GetKindTypeName(ValueKind kind)
+    {
+        return kind switch
+        {
+            ValueKind.Boolean => "System.Boolean",
+            ValueKind.Byte => "System.Byte",
+            ValueKind.Int16 => "System.Int16",
+            ValueKind.UInt16 => "System.UInt16",
+            ValueKind.Int32 => "System.Int32",
+            ValueKind.UInt32 => "System.UInt32",
+            ValueKind.Int64 => "System.Int64",
+            ValueKind.UInt64 => "System.UInt64",
+            ValueKind.Single => "System.Single",
+            ValueKind.Double => "System.Double",
+            ValueKind.String => "System.String",
+            _ => "未承载值"
         };
     }
 
@@ -320,6 +592,12 @@ public readonly struct S7Value
     internal string GetStringValue()
     {
         return _kind == ValueKind.String ? _stringValue! : throw Mismatch("String");
+    }
+
+    private InvalidOperationException Mismatch(ValueKind expected)
+    {
+        return new InvalidOperationException(
+            $"S7Value 不是 {GetKindTypeName(expected)} 值，实际构造来源种类为 {GetKindTypeName(_kind)}。");
     }
 
     private InvalidOperationException Mismatch(string expected)
