@@ -1,4 +1,4 @@
-﻿using System.Runtime.CompilerServices;
+using System.Runtime.CompilerServices;
 
 namespace S7.NetCore;
 
@@ -346,6 +346,21 @@ public readonly struct S7Value
         if (typeof(T) == typeof(double)) return ToDouble<T>();
         if (typeof(T) == typeof(string)) return ToStringValue<T>();
         throw new InvalidOperationException($"不支持的类型 {typeof(T)}。");
+    }
+
+    /// <summary>
+    /// 字符串格式化
+    /// </summary>
+    /// <returns></returns>
+    public override string ToString()
+    {
+        if (IsString) return _stringValue!;
+        else if (IsBoolean) return _booleanValue.ToString();
+        else if (IsSingle) return _singleValue.ToString();
+        else if (IsDouble) return _doubleValue.ToString();
+        else if (IsSignedInteger) return _signedValue.ToString();
+        else if (IsUnsignedInteger) return _unsignedValue.ToString();
+        else return string.Empty;
     }
 
     /// <summary>
