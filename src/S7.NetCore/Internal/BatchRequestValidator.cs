@@ -3,14 +3,14 @@ namespace S7.NetCore.Internal;
 internal readonly record struct BatchTypedReadPlan(
     S7Address Address,
     S7DataType DataType,
-    int Capacity,
+    int EffectiveCapacity,
     int BytesOccupied,
     BatchWireItem Wire);
 
 internal readonly record struct BatchTypedWritePlan(
     S7Address Address,
     S7DataType DataType,
-    int Capacity,
+    int EffectiveCapacity,
     int BytesOccupied,
     BatchWireItem Wire);
 
@@ -58,16 +58,30 @@ internal static class BatchRequestValidator
         for (int i = 0; i < items.Count; i++)
         {
             S7TypedReadBatchItem item = items[i];
-            S7Address address = S7Address.Parse(item.Address);
-            int occupied = TypedRequestValidator.ValidateRead(
-                new S7TypedReadRequest(item.Address, item.DataType, item.Capacity),
-                in address);
+            S7Address address;
+            TypedValidationResult validation;
+            try
+            {
+                address = S7AddressParser.ParseSyntax(item.Address);
+                validation = TypedRequestValidator.ValidateRead(
+                    new S7TypedReadRequest(item.Address, item.DataType, item.Capacity),
+                    in address);
+            }
+            catch (S7ClientException exception)
+            {
+                throw exception.WithBatchIndex(i);
+            }
+
             plans.Add(new BatchTypedReadPlan(
                 address,
-                item.DataType,
-                item.Capacity,
-                occupied,
-                new BatchWireItem(address.Area, address.DbNumber, address.StartByte, new byte[occupied])));
+                validation.DataType,
+                validation.EffectiveCapacity,
+                validation.BytesOccupied,
+                new BatchWireItem(
+                    address.Area,
+                    address.DbNumber,
+                    address.StartByte,
+                    new byte[validation.BytesOccupied])));
         }
 
         return plans;
@@ -80,13 +94,22 @@ internal static class BatchRequestValidator
         for (int i = 0; i < items.Count; i++)
         {
             S7TypedWriteBatchItem item = items[i];
-            S7Address address = S7Address.Parse(item.Address);
-            int occupied = TypedRequestValidator.ValidateWrite(
-                new S7TypedWriteRequest(item.Address, item.DataType, item.Value, item.Capacity),
-                in address);
+            S7Address address;
+            TypedValidationResult validation;
+            try
+            {
+                address = S7AddressParser.ParseSyntax(item.Address);
+                validation = TypedRequestValidator.ValidateWrite(
+                    new S7TypedWriteRequest(item.Address, item.DataType, item.Value, item.Capacity),
+                    in address);
+            }
+            catch (S7ClientException exception)
+            {
+                throw exception.WithBatchIndex(i);
+            }
 
             BatchWireItem wire;
-            if (item.DataType == S7DataType.Bool)
+            if (validation.DataType == S7DataType.Bool)
             {
                 wire = new BatchWireItem(
                     address.Area,
@@ -98,11 +121,19 @@ internal static class BatchRequestValidator
             }
             else
             {
-                byte[] encoded = S7ValueCodec.Encode(item.DataType, item.Value, item.Capacity);
+                byte[] encoded = S7ValueCodec.Encode(
+                    validation.DataType,
+                    item.Value,
+                    validation.EffectiveCapacity);
                 wire = new BatchWireItem(address.Area, address.DbNumber, address.StartByte, encoded);
             }
 
-            plans.Add(new BatchTypedWritePlan(address, item.DataType, item.Capacity, occupied, wire));
+            plans.Add(new BatchTypedWritePlan(
+                address,
+                validation.DataType,
+                validation.EffectiveCapacity,
+                validation.BytesOccupied,
+                wire));
         }
 
         WriteOverlapDetector.Validate(plans.Select(static plan => plan.Wire).ToArray());

@@ -67,6 +67,8 @@ public sealed class S7TypedReadBatchItemResult
         S7Value value,
         int bytesOccupied,
         S7Address address,
+        S7DataType dataType,
+        int effectiveCapacity,
         S7ErrorCode? errorCode,
         byte? plcReturnCode)
     {
@@ -75,6 +77,8 @@ public sealed class S7TypedReadBatchItemResult
         Value = value;
         BytesOccupied = bytesOccupied;
         Address = address;
+        DataType = dataType;
+        EffectiveCapacity = effectiveCapacity;
         ErrorCode = errorCode;
         PlcReturnCode = plcReturnCode;
     }
@@ -94,6 +98,12 @@ public sealed class S7TypedReadBatchItemResult
     /// <summary>解析后的地址。</summary>
     public S7Address Address { get; }
 
+    /// <summary>本条目的生效数据类型。</summary>
+    public S7DataType DataType { get; }
+
+    /// <summary>本条目的有效字符串容量；非字符串类型为 0。</summary>
+    public int EffectiveCapacity { get; }
+
     /// <summary>失败时的稳定错误码。</summary>
     public S7ErrorCode? ErrorCode { get; }
 
@@ -109,6 +119,8 @@ public sealed class S7TypedWriteBatchItemResult
         bool succeeded,
         int bytesWritten,
         S7Address address,
+        S7DataType dataType,
+        int effectiveCapacity,
         S7ErrorCode? errorCode,
         byte? plcReturnCode)
     {
@@ -116,6 +128,8 @@ public sealed class S7TypedWriteBatchItemResult
         Succeeded = succeeded;
         BytesWritten = bytesWritten;
         Address = address;
+        DataType = dataType;
+        EffectiveCapacity = effectiveCapacity;
         ErrorCode = errorCode;
         PlcReturnCode = plcReturnCode;
     }
@@ -131,6 +145,12 @@ public sealed class S7TypedWriteBatchItemResult
 
     /// <summary>解析后的地址。</summary>
     public S7Address Address { get; }
+
+    /// <summary>本条目的生效数据类型。</summary>
+    public S7DataType DataType { get; }
+
+    /// <summary>本条目的有效字符串容量；非字符串类型为 0。</summary>
+    public int EffectiveCapacity { get; }
 
     /// <summary>失败时的稳定错误码。</summary>
     public S7ErrorCode? ErrorCode { get; }

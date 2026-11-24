@@ -29,15 +29,25 @@ public enum S7DataType
     /// <summary>IEEE754 双精度浮点数，占用 8 字节。允许后缀 D。</summary>
     LReal = 8,
 
-    /// <summary>以 0x00 结尾的 ASCII C 字符串，占用 Capacity 字节，Capacity 范围 1～254。允许后缀 B。</summary>
+    /// <summary>
+    /// 以 0x00 结尾的 ASCII C 字符串，占用 Capacity 字节，Capacity 范围 1～254。
+    /// 允许后缀 B，或 <c>DBR</c> + <c>.容量</c>（例如 <c>DB1.DBR13.15</c>）；
+    /// 后缀仅限定允许类型，数据类型仍必须显式提供；地址容量与 Capacity 不一致返回 136。
+    /// </summary>
     String = 9,
 
-    /// <summary>带容量与实际长度头部的 ASCII 字符串，占用 Capacity + 2 字节，Capacity 范围 1～254。允许后缀 B。</summary>
+    /// <summary>
+    /// 带容量与实际长度头部的 ASCII 字符串，占用 Capacity + 2 字节，Capacity 范围 1～254。
+    /// 允许后缀 B，或 <c>DBS</c> + <c>.容量</c>（例如 <c>DB1.DBS13.15</c>）；
+    /// 后缀仅限定允许类型，数据类型仍必须显式提供；地址容量与 Capacity 不一致返回 136。
+    /// </summary>
     S7String = 10,
 
     /// <summary>
     /// UTF-16 双字节字符串：4 字节头（2 字节容量 + 2 字节长度，均大端、按 UTF-16 码元计）加 2 × Capacity 字节 UTF-16BE 字符区。
-    /// Capacity 范围 1～16383 码元，占用 4 + 2 × Capacity 字节；无 0x00 终止符、无 BOM，未使用码元补 0x0000。允许后缀 B。
+    /// Capacity 范围 1～16383 码元，占用 4 + 2 × Capacity 字节；无 0x00 终止符、无 BOM，未使用码元补 0x0000。
+    /// 允许后缀 B，或 <c>DBL</c> + <c>.容量</c>（例如 <c>DB1.DBL13.15</c>）；
+    /// 后缀仅限定允许类型，数据类型仍必须显式提供；地址容量与 Capacity 不一致返回 136。
     /// </summary>
     S7WString = 11
 }

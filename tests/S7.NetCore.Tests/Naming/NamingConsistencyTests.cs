@@ -42,13 +42,13 @@ public sealed class NamingConsistencyTests
 
         Assert.Contains("src\\S7.NetCore\\S7.NetCore.csproj", solution, StringComparison.Ordinal);
         Assert.Contains("tests\\S7.NetCore.Tests\\S7.NetCore.Tests.csproj", solution, StringComparison.Ordinal);
-        Assert.Contains("src\\S7.NetCore.Tools\\S7.NetCore.Tools.csproj", solution, StringComparison.Ordinal);
+        Assert.DoesNotContain("S7.NetCore.Tools", solution, StringComparison.Ordinal);
         Assert.DoesNotContain("Snap7.NetCore", solution, StringComparison.Ordinal);
 
         int projectCount = solution
             .Split('\n')
             .Count(line => line.Contains(".csproj", StringComparison.Ordinal));
-        Assert.Equal(3, projectCount);
+        Assert.Equal(2, projectCount);
     }
 
     [Fact]

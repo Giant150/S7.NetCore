@@ -78,4 +78,20 @@ public sealed class S7ClientException : Exception
             BatchFailedItems,
             SucceededItemCount);
     }
+
+    internal S7ClientException WithBatchIndex(int index)
+    {
+        return new S7ClientException(
+            Category,
+            ErrorCode,
+            Stage,
+            $"批量条目 {index}：{Message}",
+            PlcReturnCode,
+            BytesWritten,
+            WrittenRange,
+            WriteOutcomeUncertain,
+            InnerException,
+            BatchFailedItems,
+            SucceededItemCount);
+    }
 }

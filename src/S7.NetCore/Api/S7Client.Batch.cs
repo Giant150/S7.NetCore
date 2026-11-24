@@ -203,7 +203,7 @@ public sealed partial class S7Client
                     }
                     else
                     {
-                        value = S7ValueCodec.Decode(plan.DataType, rawItem.Data, plan.Capacity);
+                        value = S7ValueCodec.Decode(plan.DataType, rawItem.Data, plan.EffectiveCapacity);
                     }
                 }
                 catch (S7ClientException exception)
@@ -228,6 +228,8 @@ public sealed partial class S7Client
                 value,
                 plan.BytesOccupied,
                 plan.Address,
+                plan.DataType,
+                plan.EffectiveCapacity,
                 errorCode,
                 plcReturnCode);
         }
@@ -257,6 +259,8 @@ public sealed partial class S7Client
                 succeeded,
                 succeeded ? plans[i].Wire.Length : 0,
                 plans[i].Address,
+                plans[i].DataType,
+                plans[i].EffectiveCapacity,
                 errorCode,
                 succeeded ? null : returnCode);
         }

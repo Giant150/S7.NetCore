@@ -9,6 +9,7 @@ internal static class StructAddressValidator
     {
         if (address.Area != S7Area.DataBlock
             || address.Width != S7AccessWidth.Byte
+            || address.Suffix != S7AddressSuffix.B
             || address.BitNumber is not null
             || address.DbNumber < 1)
         {

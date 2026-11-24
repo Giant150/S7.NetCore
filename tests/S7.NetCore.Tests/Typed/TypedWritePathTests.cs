@@ -210,6 +210,51 @@ public sealed class TypedWritePathTests
         Assert.Equal(Encoding.ASCII.GetString(transport.Memory[18..24]), result.Value.AsString());
     }
 
+    [Fact]
+    public async Task WriteS7String_WithCapacitySuffix_UsesAddressCapacity()
+    {
+        var transport = new FakeTcpTransport();
+        await using S7Client client = CreateClient(transport);
+        await client.ConnectAsync();
+
+        int written = await client.WriteValueAsync(
+            new S7TypedWriteRequest(
+                "DB2.DBS16.16",
+                S7DataType.S7String,
+                S7Value.FromString("S7-PLC")));
+
+        Assert.Equal(18, written);
+        Assert.Equal(16, transport.Memory[16]);
+        Assert.Equal(6, transport.Memory[17]);
+        Assert.Equal("S7-PLC"u8.ToArray(), transport.Memory[18..24]);
+        Assert.Equal(0, transport.Memory[24]);
+
+        ChunkBoundary chunk = Assert.Single(ChunkFrameInspector.WriteChunks(transport.ReceivedFrames));
+        Assert.Equal(16, chunk.StartByte);
+        Assert.Equal(18, chunk.Length);
+    }
+
+    [Fact]
+    public async Task WriteString_SuffixCapacityConflict_Reports136WithoutWriteRequest()
+    {
+        var transport = new FakeTcpTransport();
+        await using S7Client client = CreateClient(transport);
+        await client.ConnectAsync();
+        int framesBefore = transport.ReceivedFrames.Count;
+
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(
+            () => client.WriteValueAsync(
+                new S7TypedWriteRequest(
+                    "DB2.DBR16.16",
+                    S7DataType.String,
+                    S7Value.FromString("A"),
+                    Capacity: 8)));
+
+        Assert.Equal(S7ErrorCode.StringCapacityInvalid, exception.ErrorCode);
+        Assert.Equal(framesBefore, transport.ReceivedFrames.Count);
+        Assert.Contains("不一致", exception.Message, StringComparison.Ordinal);
+    }
+
     private static S7Client CreateClient(FakeTcpTransport transport)
     {
         return new S7Client(CreateOptions(), transport: transport);

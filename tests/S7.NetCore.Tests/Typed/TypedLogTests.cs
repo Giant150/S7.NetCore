@@ -162,6 +162,77 @@ public sealed class TypedLogTests
         Assert.Equal(2, entry.BytesOccupied);
     }
 
+    [Fact]
+    public async Task StringSuffixReadSuccess_LogsAddressCapacity()
+    {
+        var logger = new TestLogger();
+        var transport = new FakeTcpTransport();
+        "HELLO"u8.ToArray().CopyTo(transport.Memory, 13);
+        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await client.ConnectAsync();
+
+        S7TypedReadResult result = await client.ReadValueAsync(
+            new S7TypedReadRequest("DB1.DBR13.15", S7DataType.String));
+
+        Assert.Equal("HELLO", result.Value.AsString());
+        S7LogEntry entry = FindEntry(logger, "Read", succeeded: true, S7DataType.String);
+        Assert.Equal(15, entry.Capacity);
+        Assert.Equal(15, entry.BytesOccupied);
+        Assert.Equal(13, entry.StartByte);
+    }
+
+    [Fact]
+    public async Task StringSuffixValidationFailure_LogsEffectiveCapacity()
+    {
+        var logger = new TestLogger();
+        var transport = new FakeTcpTransport();
+        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await client.ConnectAsync();
+
+        await Assert.ThrowsAsync<S7ClientException>(
+            () => client.ReadValueAsync(
+                new S7TypedReadRequest("DB1.DBR13.15", S7DataType.S7String)));
+
+        S7LogEntry entry = FindEntry(logger, "Read", succeeded: false, S7DataType.S7String);
+        Assert.Equal(S7ErrorCode.DataTypeAddressMismatch, entry.ErrorCode);
+        Assert.Equal(15, entry.Capacity);
+        Assert.Equal(17, entry.BytesOccupied);
+    }
+
+    [Fact]
+    public async Task UnsupportedDataTypeFailure_LogsZeroOccupiedBytes()
+    {
+        var logger = new TestLogger();
+        var transport = new FakeTcpTransport();
+        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await client.ConnectAsync();
+
+        await Assert.ThrowsAsync<S7ClientException>(
+            () => client.ReadValueAsync(new S7TypedReadRequest("DB1.DBW0", (S7DataType)99)));
+
+        S7LogEntry entry = FindEntry(logger, "Read", succeeded: false, (S7DataType)99);
+        Assert.Equal(S7ErrorCode.DataTypeNotSupported, entry.ErrorCode);
+        Assert.Equal(0, entry.BytesOccupied);
+        Assert.Null(entry.Capacity);
+    }
+
+    [Fact]
+    public async Task LRealWidthMismatchFailure_LogsEightOccupiedBytes()
+    {
+        var logger = new TestLogger();
+        var transport = new FakeTcpTransport();
+        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await client.ConnectAsync();
+
+        await Assert.ThrowsAsync<S7ClientException>(
+            () => client.ReadValueAsync(new S7TypedReadRequest("DB1.DBW0", S7DataType.LReal)));
+
+        S7LogEntry entry = FindEntry(logger, "Read", succeeded: false, S7DataType.LReal);
+        Assert.Equal(S7ErrorCode.DataTypeAddressMismatch, entry.ErrorCode);
+        Assert.Equal(8, entry.BytesOccupied);
+        Assert.Null(entry.Capacity);
+    }
+
     private static S7LogEntry FindEntry(
         TestLogger logger,
         string operation,

@@ -244,7 +244,197 @@ public sealed class TypedValidationTests
         Assert.DoesNotContain("ABCDE", exception.Message, StringComparison.Ordinal);
     }
 
+    [Theory]
+    [InlineData("DB1.DBR13.15", S7DataType.String, 15, S7AddressSuffix.R)]
+    [InlineData("DB1.DBS13.15", S7DataType.S7String, 17, S7AddressSuffix.S)]
+    [InlineData("DB1.DBL13.15", S7DataType.S7WString, 34, S7AddressSuffix.L)]
+    public void CapacitySuffix_WithMatchingType_UsesAddressCapacity(
+        string expression,
+        S7DataType dataType,
+        int expectedBytes,
+        S7AddressSuffix expectedSuffix)
+    {
+        TypedValidationResult result = ValidateReadResult(expression, dataType);
+
+        Assert.Equal(dataType, result.DataType);
+        Assert.Equal(expectedSuffix, result.Suffix);
+        Assert.Equal(15, result.AddressCapacity);
+        Assert.Equal(15, result.EffectiveCapacity);
+        Assert.Equal(expectedBytes, result.BytesOccupied);
+        Assert.Equal(expectedBytes, ValidateRead(expression, dataType));
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13.15", S7DataType.S7String, S7AddressSuffix.R)]
+    [InlineData("DB1.DBR13.15", S7DataType.Byte, S7AddressSuffix.R)]
+    [InlineData("DB1.DBR13.15", S7DataType.S7WString, S7AddressSuffix.R)]
+    [InlineData("DB1.DBS13.15", S7DataType.String, S7AddressSuffix.S)]
+    [InlineData("DB1.DBL13.15", S7DataType.S7String, S7AddressSuffix.L)]
+    [InlineData("DB1.DBL13.15", S7DataType.String, S7AddressSuffix.L)]
+    public void CapacitySuffix_WithDifferentType_Reports133(
+        string expression,
+        S7DataType dataType,
+        S7AddressSuffix expectedSuffix)
+    {
+        S7ClientException exception = AssertInvalid(
+            () => ValidateRead(expression, dataType),
+            S7ErrorCode.DataTypeAddressMismatch);
+
+        Assert.Contains($"后缀 {expectedSuffix}", exception.Message, StringComparison.Ordinal);
+        Assert.Contains(dataType.ToString(), exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13.15")]
+    [InlineData("DB1.DBS13.15")]
+    [InlineData("DB1.DBL13.15")]
+    public void CapacitySuffix_WithoutExplicitType_Reports133(string expression)
+    {
+        S7ClientException exception = AssertInvalid(
+            () => ValidateRead(expression, default),
+            S7ErrorCode.DataTypeAddressMismatch);
+
+        Assert.Contains("必须显式提供数据类型", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13.15", S7DataType.String, 16)]
+    [InlineData("DB1.DBS13.15", S7DataType.S7String, 8)]
+    [InlineData("DB1.DBL13.15", S7DataType.S7WString, 16)]
+    public void CapacitySuffix_ConflictingCapacityParameter_Reports136(
+        string expression,
+        S7DataType dataType,
+        int capacity)
+    {
+        S7ClientException exception = AssertInvalid(
+            () => ValidateRead(expression, dataType, capacity),
+            S7ErrorCode.StringCapacityInvalid);
+
+        Assert.Contains("不一致", exception.Message, StringComparison.Ordinal);
+        Assert.Contains($"容量参数 {capacity}", exception.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CapacitySuffix_MatchingCapacityParameter_IsAccepted()
+    {
+        Assert.Equal(15, ValidateRead("DB1.DBR13.15", S7DataType.String, capacity: 15));
+        Assert.Equal(
+            34,
+            ValidateWrite(
+                "DB1.DBL13.15",
+                S7DataType.S7WString,
+                S7Value.FromString("A"),
+                capacity: 15));
+    }
+
+    [Fact]
+    public void CapacitySuffix_ContentLength_RespectsAddressCapacity()
+    {
+        Assert.Equal(
+            15,
+            ValidateWrite("DB1.DBR13.15", S7DataType.String, S7Value.FromString(new string('A', 14))));
+
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBR13.15", S7DataType.String, S7Value.FromString(new string('A', 15))),
+            S7ErrorCode.StringCapacityInvalid);
+
+        Assert.Equal(
+            17,
+            ValidateWrite("DB1.DBS13.15", S7DataType.S7String, S7Value.FromString(new string('A', 15))));
+
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBS13.15", S7DataType.S7String, S7Value.FromString(new string('A', 16))),
+            S7ErrorCode.StringCapacityInvalid);
+
+        Assert.Equal(
+            34,
+            ValidateWrite("DB1.DBL13.15", S7DataType.S7WString, S7Value.FromString(new string('A', 15))));
+
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBL13.15", S7DataType.S7WString, S7Value.FromString(new string('A', 16))),
+            S7ErrorCode.StringCapacityInvalid);
+
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBL13.15", S7DataType.S7WString, S7Value.FromString("\uD83D")),
+            S7ErrorCode.StringEncodingInvalid);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBB0", S7DataType.Byte)]
+    [InlineData("DB1.DBW0", S7DataType.Word)]
+    [InlineData("DB1.DBD0", S7DataType.DWord)]
+    [InlineData("DB1.DBD0", S7DataType.DInt)]
+    [InlineData("DB1.DBD0", S7DataType.LReal)]
+    public void StringValue_ForNonStringType_ReportsMismatch(string expression, S7DataType dataType)
+    {
+        AssertInvalid(
+            () => ValidateWrite(expression, dataType, S7Value.FromString("A")),
+            S7ErrorCode.ValueTypeMismatch);
+    }
+
+    [Fact]
+    public void NonStringValue_ForWString_ReportsMismatch()
+    {
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBL13.15", S7DataType.S7WString, S7Value.FromByte(1)),
+            S7ErrorCode.ValueTypeMismatch);
+    }
+
+    [Fact]
+    public void DIntRangeViolation_IsRejected()
+    {
+        AssertInvalid(
+            () => ValidateWrite("DB1.DBD0", S7DataType.DInt, S7Value.FromInt64(long.MinValue)),
+            S7ErrorCode.ValueOutOfRange);
+    }
+
+    [Fact]
+    public void UnsignedValue_ForSignedType_WithinRange_IsAccepted()
+    {
+        Assert.Equal(2, ValidateWrite("DB1.DBW0", S7DataType.Int, S7Value.FromUInt16(100)));
+    }
+
+    [Fact]
+    public void ByteSuffix_WithCapacityParameter_KeepsOriginalBehavior()
+    {
+        TypedValidationResult result = ValidateReadResult("DB1.DBB13", S7DataType.String, 15);
+
+        Assert.Equal(S7AddressSuffix.B, result.Suffix);
+        Assert.Null(result.AddressCapacity);
+        Assert.Equal(15, result.EffectiveCapacity);
+        Assert.Equal(15, result.BytesOccupied);
+    }
+
+    [Fact]
+    public void NonDataBlockAddress_WithCapacityParameter_KeepsOriginalBehavior()
+    {
+        TypedValidationResult result = ValidateReadResult("MB10", S7DataType.String, 8);
+
+        Assert.Equal(S7AddressSuffix.None, result.Suffix);
+        Assert.Null(result.AddressCapacity);
+        Assert.Equal(8, result.EffectiveCapacity);
+        Assert.Equal(8, result.BytesOccupied);
+    }
+
+    private static S7ClientException AssertInvalid(Action action, S7ErrorCode expectedCode)
+    {
+        S7ClientException exception = Assert.Throws<S7ClientException>(action);
+
+        Assert.Equal(S7ErrorCategory.InvalidArgument, exception.Category);
+        Assert.Equal(expectedCode, exception.ErrorCode);
+        Assert.Equal(S7OperationStage.Validate, exception.Stage);
+        return exception;
+    }
+
     private static int ValidateRead(string expression, S7DataType dataType, int capacity = 0)
+    {
+        return ValidateReadResult(expression, dataType, capacity).BytesOccupied;
+    }
+
+    private static TypedValidationResult ValidateReadResult(
+        string expression,
+        S7DataType dataType,
+        int capacity = 0)
     {
         S7Address address = S7Address.Parse(expression);
         var request = new S7TypedReadRequest(expression, dataType, capacity);
@@ -259,15 +449,7 @@ public sealed class TypedValidationTests
     {
         S7Address address = S7Address.Parse(expression);
         var request = new S7TypedWriteRequest(expression, dataType, value, capacity);
-        return TypedRequestValidator.ValidateWrite(request, address);
+        return TypedRequestValidator.ValidateWrite(request, address).BytesOccupied;
     }
 
-    private static void AssertInvalid(Action action, S7ErrorCode expectedCode)
-    {
-        S7ClientException exception = Assert.Throws<S7ClientException>(action);
-
-        Assert.Equal(S7ErrorCategory.InvalidArgument, exception.Category);
-        Assert.Equal(expectedCode, exception.ErrorCode);
-        Assert.Equal(S7OperationStage.Validate, exception.Stage);
     }
-}

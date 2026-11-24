@@ -23,34 +23,35 @@ public sealed partial class S7Client
         S7TypedReadRequest request,
         CancellationToken cancellationToken = default)
     {
-        S7Address address = S7Address.Parse(request.Address);
+        S7Address address = S7AddressParser.ParseSyntax(request.Address);
         long startTimestamp = Stopwatch.GetTimestamp();
-        int bytesOccupied;
+        TypedValidationResult validation = default;
 
         try
         {
-            bytesOccupied = TypedRequestValidator.ValidateRead(in request, in address);
+            validation = TypedRequestValidator.ValidateRead(in request, in address);
         }
         catch (S7ClientException exception)
         {
+            int effectiveCapacity = EffectiveCapacityForLog(address, request.Capacity);
             LogTyped(
                 "Read",
                 S7OperationStage.Validate,
                 address,
                 request.DataType,
-                EstimateOccupiedBytes(request.DataType, request.Capacity),
+                EstimateOccupiedBytes(request.DataType, effectiveCapacity),
                 succeeded: false,
                 startTimestamp,
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(request.DataType, request.Capacity));
+                CapacityForLog(request.DataType, effectiveCapacity));
             throw;
         }
 
         try
         {
-            if (request.DataType == S7DataType.Bool)
+            if (validation.DataType == S7DataType.Bool)
             {
                 S7ReadResult readResult = await ReadBytesResultAsync(
                     new S7ReadRequest(address.Area, address.DbNumber, address.StartByte, 1),
@@ -62,36 +63,43 @@ public sealed partial class S7Client
                     "Read",
                     S7OperationStage.Read,
                     address,
-                    request.DataType,
+                    validation.DataType,
                     bytesOccupied: 1,
                     succeeded: true,
                     startTimestamp,
-                    capacity: CapacityForLog(request.DataType, request.Capacity));
+                    capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
                 return new S7TypedReadResult(boolValue, 1, address)
                 {
+                    DataType = validation.DataType,
+                    EffectiveCapacity = validation.EffectiveCapacity,
                     RecoveryCount = readResult.RecoveryCount,
                     Retried = readResult.Retried
                 };
             }
 
             S7ReadResult data = await ReadBytesResultAsync(
-                new S7ReadRequest(address.Area, address.DbNumber, address.StartByte, bytesOccupied),
+                new S7ReadRequest(address.Area, address.DbNumber, address.StartByte, validation.BytesOccupied),
                 cancellationToken).ConfigureAwait(false);
 
-            S7Value decoded = S7ValueCodec.Decode(request.DataType, data.Data.Span, request.Capacity);
+            S7Value decoded = S7ValueCodec.Decode(
+                validation.DataType,
+                data.Data.Span,
+                validation.EffectiveCapacity);
             LogTyped(
                 "Read",
                 S7OperationStage.Read,
                 address,
-                request.DataType,
-                bytesOccupied,
+                validation.DataType,
+                validation.BytesOccupied,
                 succeeded: true,
                 startTimestamp,
-                capacity: CapacityForLog(request.DataType, request.Capacity));
+                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
-            return new S7TypedReadResult(decoded, bytesOccupied, address)
+            return new S7TypedReadResult(decoded, validation.BytesOccupied, address)
             {
+                DataType = validation.DataType,
+                EffectiveCapacity = validation.EffectiveCapacity,
                 RecoveryCount = data.RecoveryCount,
                 Retried = data.Retried
             };
@@ -102,16 +110,16 @@ public sealed partial class S7Client
                 "Read",
                 S7OperationStage.Read,
                 address,
-                request.DataType,
-                bytesOccupied,
+                validation.DataType,
+                validation.BytesOccupied,
                 succeeded: false,
                 startTimestamp,
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(request.DataType, request.Capacity));
+                CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
-            throw exception.WithContext(BuildContext(address, request.DataType, request.Capacity, bytesOccupied));
+            throw exception.WithContext(BuildContext(address, validation));
         }
     }
 
@@ -144,28 +152,29 @@ public sealed partial class S7Client
         S7TypedWriteRequest request,
         CancellationToken cancellationToken = default)
     {
-        S7Address address = S7Address.Parse(request.Address);
+        S7Address address = S7AddressParser.ParseSyntax(request.Address);
         long startTimestamp = Stopwatch.GetTimestamp();
-        int bytesOccupied;
+        TypedValidationResult validation = default;
 
         try
         {
-            bytesOccupied = TypedRequestValidator.ValidateWrite(in request, in address);
+            validation = TypedRequestValidator.ValidateWrite(in request, in address);
         }
         catch (S7ClientException exception)
         {
+            int effectiveCapacity = EffectiveCapacityForLog(address, request.Capacity);
             LogTyped(
                 "Write",
                 S7OperationStage.Validate,
                 address,
                 request.DataType,
-                EstimateOccupiedBytes(request.DataType, request.Capacity),
+                EstimateOccupiedBytes(request.DataType, effectiveCapacity),
                 succeeded: false,
                 startTimestamp,
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(request.DataType, request.Capacity));
+                CapacityForLog(request.DataType, effectiveCapacity));
             throw;
         }
 
@@ -173,7 +182,7 @@ public sealed partial class S7Client
         {
             S7WriteResult result;
 
-            if (request.DataType == S7DataType.Bool)
+            if (validation.DataType == S7DataType.Bool)
             {
                 bool value = request.Value.AsBoolean();
                 result = await _session.WriteBitResultAsync(
@@ -184,7 +193,10 @@ public sealed partial class S7Client
             }
             else
             {
-                byte[] encoded = S7ValueCodec.Encode(request.DataType, request.Value, request.Capacity);
+                byte[] encoded = S7ValueCodec.Encode(
+                    validation.DataType,
+                    request.Value,
+                    validation.EffectiveCapacity);
                 result = await WriteBytesResultAsync(
                     new S7WriteRequest(address.Area, address.DbNumber, address.StartByte, encoded),
                     cancellationToken).ConfigureAwait(false);
@@ -194,11 +206,11 @@ public sealed partial class S7Client
                 "Write",
                 S7OperationStage.Write,
                 address,
-                request.DataType,
-                bytesOccupied,
+                validation.DataType,
+                validation.BytesOccupied,
                 succeeded: true,
                 startTimestamp,
-                capacity: CapacityForLog(request.DataType, request.Capacity));
+                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
             return result;
         }
@@ -208,17 +220,22 @@ public sealed partial class S7Client
                 "Write",
                 S7OperationStage.Write,
                 address,
-                request.DataType,
-                bytesOccupied,
+                validation.DataType,
+                validation.BytesOccupied,
                 succeeded: false,
                 startTimestamp,
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(request.DataType, request.Capacity));
+                CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
-            throw exception.WithContext(BuildContext(address, request.DataType, request.Capacity, bytesOccupied));
+            throw exception.WithContext(BuildContext(address, validation));
         }
+    }
+
+    private static int EffectiveCapacityForLog(in S7Address address, int capacityParameter)
+    {
+        return address.AddressCapacity ?? capacityParameter;
     }
 
     private static int? CapacityForLog(S7DataType dataType, int capacity)
@@ -243,17 +260,20 @@ public sealed partial class S7Client
         };
     }
 
-    private static string BuildContext(
-        in S7Address address,
-        S7DataType dataType,
-        int capacity,
-        int bytesOccupied)
+    private static string BuildContext(in S7Address address, in TypedValidationResult validation)
     {
-        string capacityText = dataType is S7DataType.String or S7DataType.S7String or S7DataType.S7WString
-            ? $"容量 {capacity}（{S7WStringRules.GetCapacityUnit(dataType)}），"
+        string capacityText = validation.DataType is S7DataType.String or S7DataType.S7String
+            or S7DataType.S7WString
+            ? $"后缀 {validation.Suffix}，地址容量 {FormatCapacity(address.AddressCapacity)}，"
+                + $"有效容量 {validation.EffectiveCapacity}（{S7WStringRules.GetCapacityUnit(validation.DataType)}），"
             : string.Empty;
 
-        return $"地址表达式 '{address.Expression}'，数据类型 {dataType}，{capacityText}占用 {bytesOccupied} 字节。";
+        return $"地址表达式 '{address.Expression}'，数据类型 {validation.DataType}，{capacityText}占用 {validation.BytesOccupied} 字节。";
+    }
+
+    private static string FormatCapacity(int? capacity)
+    {
+        return capacity?.ToString() ?? "未声明";
     }
 
     private void LogTyped(

@@ -12,6 +12,23 @@ internal static class S7AddressParser
 
     internal static S7Address Parse(string expression)
     {
+        S7Address address = ParseSyntax(expression);
+        if (address.AddressCapacity is int capacity)
+        {
+            S7StringSuffixRules.ValidateAddressCapacity(address.Suffix, capacity, address.Expression);
+            if (address.AllowedDataType is S7DataType dataType)
+            {
+                S7TypeRules.ValidateOccupiedRange(
+                    in address,
+                    S7TypeRules.GetOccupiedBytes(dataType, capacity));
+            }
+        }
+
+        return address;
+    }
+
+    internal static S7Address ParseSyntax(string expression)
+    {
         if (expression is null)
         {
             throw Syntax(null, "表达式为 null");
@@ -59,22 +76,25 @@ internal static class S7AddressParser
         ReadNumber(upper, ref index, out long dbNumber);
         if (index >= upper.Length || upper[index] != '.')
         {
-            throw Syntax(expression, "DB 号后必须为 '.' 与 DBB/DBW/DBD/DBX 后缀");
+            throw Syntax(expression, "DB 号后必须为 '.' 与 DBB/DBW/DBD/DBX/DBR/DBS/DBL 后缀");
         }
 
         index++;
         if (index + 2 >= upper.Length || upper[index] != 'D' || upper[index + 1] != 'B')
         {
-            throw Syntax(expression, "DB 后缀必须是 DBB/DBW/DBD/DBX");
+            throw Syntax(expression, "DB 后缀必须是 DBB/DBW/DBD/DBX/DBR/DBS/DBL");
         }
 
-        S7AccessWidth width = upper[index + 2] switch
+        (S7AccessWidth width, S7AddressSuffix suffix) = upper[index + 2] switch
         {
-            'B' => S7AccessWidth.Byte,
-            'W' => S7AccessWidth.Word,
-            'D' => S7AccessWidth.DWord,
-            'X' => S7AccessWidth.Bit,
-            _ => throw Syntax(expression, "DB 后缀必须是 DBB/DBW/DBD/DBX")
+            'B' => (S7AccessWidth.Byte, S7AddressSuffix.B),
+            'W' => (S7AccessWidth.Word, S7AddressSuffix.W),
+            'D' => (S7AccessWidth.DWord, S7AddressSuffix.D),
+            'X' => (S7AccessWidth.Bit, S7AddressSuffix.X),
+            'R' => (S7AccessWidth.Byte, S7AddressSuffix.R),
+            'S' => (S7AccessWidth.Byte, S7AddressSuffix.S),
+            'L' => (S7AccessWidth.Byte, S7AddressSuffix.L),
+            _ => throw Syntax(expression, "DB 后缀必须是 DBB/DBW/DBD/DBX/DBR/DBS/DBL")
         };
         index += 3;
 
@@ -85,8 +105,25 @@ internal static class S7AddressParser
 
         ReadNumber(upper, ref index, out long offset);
         int? bitNumber = null;
+        int? addressCapacity = null;
 
-        if (width == S7AccessWidth.Bit)
+        if (S7StringSuffixRules.IsCapacitySuffix(suffix))
+        {
+            if (index >= upper.Length || upper[index] != '.')
+            {
+                throw Syntax(expression, "字符串容量后缀必须携带 '.容量'，例如 DB1.DBR13.15");
+            }
+
+            index++;
+            if (index >= upper.Length || !IsDigit(upper[index]))
+            {
+                throw Syntax(expression, "字符串容量后缀的容量段必须为十进制正整数");
+            }
+
+            ReadNumber(upper, ref index, out long capacity);
+            addressCapacity = (int)Math.Min(capacity, int.MaxValue);
+        }
+        else if (width == S7AccessWidth.Bit)
         {
             if (index >= upper.Length)
             {
@@ -141,6 +178,8 @@ internal static class S7AddressParser
             StartByte = (int)offset,
             BitNumber = bitNumber,
             Width = width,
+            Suffix = suffix,
+            AddressCapacity = addressCapacity,
             Expression = expression
         };
     }
@@ -243,6 +282,8 @@ internal static class S7AddressParser
             StartByte = (int)offset,
             BitNumber = bitNumber,
             Width = width,
+            Suffix = S7AddressSuffix.None,
+            AddressCapacity = null,
             Expression = expression
         };
     }
@@ -276,7 +317,7 @@ internal static class S7AddressParser
             S7ErrorCategory.InvalidArgument,
             S7ErrorCode.AddressSyntaxInvalid,
             S7OperationStage.Validate,
-            $"地址表达式 '{expression ?? "<null>"}' 非法：{reason}。支持 DB<n>.DBB/DBW/DBD/DBX、I/E、Q/A/O、M 前缀，不支持符号寻址。");
+            $"地址表达式 '{expression ?? "<null>"}' 非法：{reason}。支持 DB<n>.DBB/DBW/DBD/DBX/DBR/DBS/DBL、I/E、Q/A/O、M 前缀，不支持符号寻址。");
     }
 
     private static S7ClientException BitNumberInvalid(string expression, string reason)

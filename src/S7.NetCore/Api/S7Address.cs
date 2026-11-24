@@ -22,19 +22,45 @@ public readonly record struct S7Address
     /// <summary>访问宽度。</summary>
     public S7AccessWidth Width { get; init; }
 
+    /// <summary>DB 访问后缀；非 DB 地址为 <see cref="S7AddressSuffix.None"/>。</summary>
+    public S7AddressSuffix Suffix { get; init; }
+
+    /// <summary>
+    /// 地址中声明的字符串容量；<see langword="null"/> 表示未声明。
+    /// 仅 <c>DBR</c>/<c>DBS</c>/<c>DBL</c> 后缀会携带该值，且不会与容量 0 混淆。
+    /// </summary>
+    public int? AddressCapacity { get; init; }
+
+    /// <summary>
+    /// 后缀允许搭配的数据类型；仅 <c>R</c>/<c>S</c>/<c>L</c> 非空。
+    /// 该值不是推导类型，调用方仍必须显式提供 <see cref="S7DataType"/>。
+    /// </summary>
+    public S7DataType? AllowedDataType
+    {
+        get
+        {
+            S7StringSuffixRules.TryGetAllowedDataType(Suffix, out S7DataType allowed);
+            return Suffix is S7AddressSuffix.R or S7AddressSuffix.S or S7AddressSuffix.L
+                ? allowed
+                : null;
+        }
+    }
+
     /// <summary>裁剪后的原始表达式。</summary>
     public string? Expression { get; init; }
 
     /// <summary>
     /// 解析地址表达式。支持 <c>DB1.DBW0</c>、<c>DB1.DBB0</c>、<c>DB1.DBD0</c>、<c>DB1.DBX0.3</c>、
-    /// <c>MW10</c>、<c>Q0.3</c> 等格式；不支持符号寻址与 T/C/Z 区域。
+    /// <c>DB1.DBR13.15</c>、<c>DB1.DBS13.15</c>、<c>DB1.DBL13.15</c>、<c>MW10</c>、<c>Q0.3</c> 等格式；
+    /// 不支持符号寻址与 T/C/Z 区域。
     /// </summary>
     /// <param name="expression">地址表达式。</param>
-    /// <returns>解析结果。</returns>
+    /// <returns>解析结果；字符串容量后缀会携带地址容量。</returns>
     /// <exception cref="S7ClientException">
     /// 表达式非法时抛出，类别为 <see cref="S7ErrorCategory.InvalidArgument"/>，
     /// 错误码为 <see cref="S7ErrorCode.AddressSyntaxInvalid"/>、<see cref="S7ErrorCode.BitNumberOutOfRange"/>、
-    /// <see cref="S7ErrorCode.AddressOutOfRange"/> 或 <see cref="S7ErrorCode.AreaNotSupported"/>。
+    /// <see cref="S7ErrorCode.StringCapacityInvalid"/>、<see cref="S7ErrorCode.AddressOutOfRange"/>
+    /// 或 <see cref="S7ErrorCode.AreaNotSupported"/>。
     /// </exception>
     public static S7Address Parse(string expression)
     {

@@ -190,6 +190,155 @@ public sealed class AddressParsingTests
         Assert.False(S7Address.TryParse(null!, out _));
     }
 
+    [Theory]
+    [InlineData("DB1.DBR13.15", S7AddressSuffix.R, S7DataType.String)]
+    [InlineData("DB1.DBS13.15", S7AddressSuffix.S, S7DataType.S7String)]
+    [InlineData("DB1.DBL13.15", S7AddressSuffix.L, S7DataType.S7WString)]
+    public void T_A11_StringCapacitySuffix_Parses(
+        string expression,
+        S7AddressSuffix suffix,
+        S7DataType allowedType)
+    {
+        S7Address address = S7Address.Parse(expression);
+
+        Assert.Equal(S7Area.DataBlock, address.Area);
+        Assert.Equal(1, address.DbNumber);
+        Assert.Equal(13, address.StartByte);
+        Assert.Null(address.BitNumber);
+        Assert.Equal(S7AccessWidth.Byte, address.Width);
+        Assert.Equal(suffix, address.Suffix);
+        Assert.Equal(15, address.AddressCapacity);
+        Assert.Equal(allowedType, address.AllowedDataType);
+        Assert.Equal(expression, address.Expression);
+    }
+
+    [Fact]
+    public void T_A12_StringSuffix_IsCaseInsensitive_AndKeepsOriginalExpression()
+    {
+        S7Address address = S7Address.Parse(" db2.dbr13.15 ");
+
+        Assert.Equal(2, address.DbNumber);
+        Assert.Equal(13, address.StartByte);
+        Assert.Equal(S7AddressSuffix.R, address.Suffix);
+        Assert.Equal(15, address.AddressCapacity);
+        Assert.Equal(S7DataType.String, address.AllowedDataType);
+        Assert.Equal("db2.dbr13.15", address.Expression);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBB0", S7AddressSuffix.B)]
+    [InlineData("DB1.DBW0", S7AddressSuffix.W)]
+    [InlineData("DB1.DBD0", S7AddressSuffix.D)]
+    [InlineData("DB1.DBX0.3", S7AddressSuffix.X)]
+    [InlineData("MW10", S7AddressSuffix.None)]
+    public void T_A13_NonCapacitySuffix_HasNoAllowedTypeOrAddressCapacity(
+        string expression,
+        S7AddressSuffix suffix)
+    {
+        S7Address address = S7Address.Parse(expression);
+
+        Assert.Equal(suffix, address.Suffix);
+        Assert.Null(address.AddressCapacity);
+        Assert.Null(address.AllowedDataType);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13.1", 1)]
+    [InlineData("DB1.DBR13.254", 254)]
+    [InlineData("DB1.DBS13.254", 254)]
+    [InlineData("DB1.DBL13.16383", 16383)]
+    public void T_A14_StringSuffixCapacityBoundaries_AreAccepted(string expression, int expectedCapacity)
+    {
+        S7Address address = S7Address.Parse(expression);
+
+        Assert.Equal(expectedCapacity, address.AddressCapacity);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13.0")]
+    [InlineData("DB1.DBR13.255")]
+    [InlineData("DB1.DBR13.9999999")]
+    [InlineData("DB1.DBS13.255")]
+    [InlineData("DB1.DBL13.16384")]
+    public void T_A15_StringSuffixCapacityOutOfRange_Reports136(string expression)
+    {
+        AssertCode(expression, S7ErrorCode.StringCapacityInvalid);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR13")]
+    [InlineData("DB1.DBR13.")]
+    [InlineData("DB1.DBR")]
+    [InlineData("DB1.DBR.15")]
+    [InlineData("DB1.DBR13.15.0")]
+    [InlineData("DB1.DBR13.+1")]
+    [InlineData("DB1.DBR13.0x10")]
+    [InlineData("DB1.DBR13.15A")]
+    public void T_A16_StringSuffixSyntaxErrors_Report130(string expression)
+    {
+        AssertCode(expression, S7ErrorCode.AddressSyntaxInvalid);
+    }
+
+    [Theory]
+    [InlineData("IR13.15")]
+    [InlineData("QR13.15")]
+    [InlineData("MR13.15")]
+    [InlineData("R13.15")]
+    public void T_A17_StringSuffix_OutsideDataBlock_IsRejected(string expression)
+    {
+        AssertCode(expression, S7ErrorCode.AddressSyntaxInvalid);
+    }
+
+    [Fact]
+    public void T_A18_StringSuffixOccupiedRange_WithinLimit_IsAccepted()
+    {
+        S7Address address = S7Address.Parse("DB1.DBR65534.2");
+
+        Assert.Equal(2, address.AddressCapacity);
+        Assert.Equal(65534, address.StartByte);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBR65535.2")]
+    [InlineData("DB1.DBS65535.2")]
+    [InlineData("DB1.DBL65530.4")]
+    public void T_A19_StringSuffixOccupiedRangeOverflow_Reports137(string expression)
+    {
+        AssertCode(expression, S7ErrorCode.AddressOutOfRange);
+    }
+
+    [Fact]
+    public void T_A20_TryParse_InvalidStringSuffixCapacity_ReturnsFalse()
+    {
+        Assert.False(S7Address.TryParse("DB1.DBR13.255", out S7Address address));
+        Assert.Equal(default(S7Address), address);
+    }
+
+    [Theory]
+    [InlineData("DB1.DBY0", S7ErrorCode.AddressSyntaxInvalid)]
+    [InlineData("DB1.DBX0X", S7ErrorCode.AddressSyntaxInvalid)]
+    [InlineData("DB1.DBX0.", S7ErrorCode.BitNumberOutOfRange)]
+    [InlineData("DB1.DBB65536", S7ErrorCode.AddressOutOfRange)]
+    [InlineData("DB1.DBL9999999.1", S7ErrorCode.AddressOutOfRange)]
+    [InlineData("IB0.3", S7ErrorCode.BitNumberOutOfRange)]
+    [InlineData("M10", S7ErrorCode.BitNumberOutOfRange)]
+    [InlineData("M10X", S7ErrorCode.AddressSyntaxInvalid)]
+    [InlineData("M10.", S7ErrorCode.BitNumberOutOfRange)]
+    [InlineData("M10.8", S7ErrorCode.BitNumberOutOfRange)]
+    [InlineData("M10.3X", S7ErrorCode.AddressSyntaxInvalid)]
+    public void T_A21_RemainingSyntaxAndBitNumberBranches(
+        string expression,
+        S7ErrorCode expectedCode)
+    {
+        AssertCode(expression, expectedCode);
+    }
+
+    [Fact]
+    public void T_A22_NonAsciiExpression_IsRejected()
+    {
+        AssertCode("DB1.DBW0℃", S7ErrorCode.AddressSyntaxInvalid);
+    }
+
     private static void AssertCode(string expression, S7ErrorCode expectedCode)
     {
         S7ClientException exception = Assert.Throws<S7ClientException>(() => S7Address.Parse(expression));

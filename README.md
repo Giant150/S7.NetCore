@@ -123,6 +123,16 @@ await client.WriteValueAsync(
 
 S7TypedReadResult text = await client.ReadValueAsync(
     new S7TypedReadRequest("DB2.DBB64", S7DataType.S7WString, Capacity: 16));
+
+// 新后缀：容量随地址声明，Capacity 省略（或与地址容量一致）
+await client.WriteValueAsync(
+    new S7TypedWriteRequest(
+        "DB2.DBR64.16",
+        S7DataType.String,
+        S7Value.FromString("HELLO")));
+
+S7TypedReadResult s7Text = await client.ReadValueAsync(
+    new S7TypedReadRequest("DB2.DBS64.16", S7DataType.S7String));
 ```
 
 | 类型 | C# 类型 | 占用字节 | 允许后缀 | 范围 / 编码 |
@@ -135,15 +145,18 @@ S7TypedReadResult text = await client.ReadValueAsync(
 | `DInt` | `int` | 4 | `D` | -2147483648～2147483647；补码；大端 |
 | `Real` | `float` | 4 | `D` | IEEE754；大端；NaN/±Inf 位模式保持 |
 | `LReal` | `double` | 8 | `D` | IEEE754；大端 |
-| `String` | `string` | `Capacity` | `B` | ASCII；0x00 结尾；内容 + 1 ≤ 容量 |
-| `S7String` | `string` | `Capacity + 2` | `B` | ASCII；首字节容量、第二字节长度 |
-| `S7WString` | `string` | `4 + 2 × Capacity` | `B` | UTF-16BE；2 字节容量 + 2 字节长度（码元）；容量 1～16383；无终止符/BOM |
+| `String` | `string` | `Capacity` | `B`；`DBR` + `.容量` | ASCII；0x00 结尾；内容 + 1 ≤ 容量 |
+| `S7String` | `string` | `Capacity + 2` | `B`；`DBS` + `.容量` | ASCII；首字节容量、第二字节长度 |
+| `S7WString` | `string` | `4 + 2 × Capacity` | `B`；`DBL` + `.容量` | UTF-16BE；2 字节容量 + 2 字节长度（码元）；容量 1～16383；无终止符/BOM |
 
 不支持：DateTime、嵌套结构体/UDT、数组与符号寻址；扁平结构体请使用下方的结构体读写。
 
 ### 地址表达式
 
 - `DB1.DBB0`、`DB1.DBW0`、`DB1.DBD0`、`DB1.DBX0.3`
+- `DB1.DBR13.15`（String，容量 15）、`DB1.DBS13.15`（S7String，容量 15）、`DB1.DBL13.15`（S7WString，容量 15）
+- `DBR`/`DBS`/`DBL` 仅支持 `DBn.` 前缀，后缀只限定允许的数据类型；`DataType` 仍必须显式提供，不一致返回 `133`
+- 地址容量与 `Capacity` 同时提供时，`Capacity=0` 取地址容量，`Capacity>0` 必须与地址容量相等，否则 `136`
 - `IB0`/`IW10`/`ID4`、`I0.3`（`E` 同义）
 - `QB0`/`QW0`/`QD0`、`Q0.3`（`A`/`O` 同义）
 - `MB10`/`MW10`/`MD10`、`M10.3`
@@ -457,28 +470,8 @@ dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.
 
 # 校验四框架产物与 NuGet 包
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
-pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.4.0.0.nupkg
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.4.1.0.nupkg
 ```
-
-## WPF 调试工具（S7.NetCore.Tools）
-
-`src/S7.NetCore.Tools` 是 Windows 专用 WPF 工具（`net10.0-windows`、`WinExe`），通过 `S7.NetCore` 公开 API 操作 PLC。首版包含：
-
-- 连接配置：IP/CPU/端口/机架/槽位/本地与远端 TSAP/三类超时/PDU/请求队列/协议跟踪，五态可用性与状态时间线。
-- 自动重连 9 项策略完整配置。
-- 原始字节读写：I/Q/M/DB、十六进制解析、写保护、超 512 字节二次确认、可选回读校验。
-- 十一种数据类型单值读写。
-- 基础操作日志：10000 条环形、级别/类别/关键字筛选、复制、清空；可选显示库诊断。
-- 写保护默认锁定，退出时断开会话。
-
-```bash
-dotnet run --project src/S7.NetCore.Tools -c Debug
-```
-
-- 工具项目显式设置 `<InvariantGlobalization>false</InvariantGlobalization>`：WPF 绑定与 `XmlLanguage` 需要可用区域性数据，不能继承根目录的 invariant globalization 设置。
-- 结果区只读 `TextBox` 使用 `Mode=OneWay`，避免 WPF 默认 TwoWay 绑定到只读属性导致启动异常。
-
-首版不包含结构体读写、批量读写页面、轮询监控、日志导出/诊断包、配置档案持久化；不新增工具测试工程。批量能力只通过库公开 API 使用，不提供 WPF 批量页。手动验收 M1～M15 需要真实或虚拟 PLC 并交互操作，本环境未执行。
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
 
@@ -518,16 +511,13 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 363 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| net10.0 全量测试 | 588 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
 | 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
 | 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| WPF 工具构建与启动 | `S7.NetCore.Tools` Debug 构建通过，0 警告 0 错误；主窗口标题/句柄存在，异常日志为空（6 秒冒烟） |
-| WPF 手动验收 M1～M15 | **未执行**（需要真实/虚拟 PLC 与交互式 UI） |
-| 全量测试 | 468 项全部通过（Release / net10.0） |
-| 版本 4.0.0 | `VersionPrefix` = `4.0.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.4.0.0.nupkg` / `.snupkg` |
+| 版本 4.1.0 | `VersionPrefix` = `4.1.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.4.1.0.nupkg` / `.snupkg` |
 | 批量读写用例 | 新增 88 项：容量边界、写重叠、请求校验、多条目协议编解码、结果装配、字节/类型化门面端到端、超时/取消/断线恢复与整批重放 |
-| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `4.0.0` |
+| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `4.1.0` |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
@@ -569,6 +559,7 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 4.1.0 | 2026-11-24 | 新增字符串容量后缀地址：`DB1.DBR13.15`（String）、`DB1.DBS13.15`（S7String）、`DB1.DBL13.15`（S7WString）；后缀仅限定允许类型，`DataType` 仍必须显式提供，缺失或不一致返回 133；地址容量与 `Capacity` 同时提供时，0 取地址容量、非 0 必须相等，否则 136；仅 `DBn.` 前缀支持；`DB1.DBB13.15` 仍按 131 拒绝，结构体新后缀按 140 拒绝；删除 `S7.NetCore.Tools` 工具项目（解决方案 3→2）；版本提升至 4.1.0 |
 | 4.0.0 | 2026-11-24 | 新增公开批量读写 API：字节视图 `ReadBatchAsync`/`WriteBatchAsync` 与类型化视图 `ReadTypedBatchAsync`/`WriteTypedBatchAsync`，一次批量调用 = 1 个请求帧 + 1 个响应帧；条目数由当前 PDU 与协议 255 计数字段决定，超限整批拒绝并由调用方分组（PDU 超限 142、条目数超限 146）；部分失败默认不抛异常，`EnsureAllSucceeded()` 为可选出口；批量写条目目标区间重叠禁止（143）；新增 `S7BatchReadItem`/`S7BatchWriteItem`/`S7TypedReadBatchItem`/`S7TypedWriteBatchItem` 与对应结果类型、`S7BatchItemFailure`、错误码 141～146；除已声明的 `As<T>()` → `ToValue<T>` 迁移与字符串标注精确化外，既有 API 不变；单点读取内部实现（含 `S7Value` 承载）允许变更但对外契约不变；字符串结果标注精确化为 `String`/`S7String`/`S7WString`（`StringEncoding`），`S7Value` 承载扩展为已声明行为变更；主版本升级对应上述新增与行为变更 |
 | 3.0.0 | 2026-11-22 | 版本号跨主版本提升至 3.0.0（主版本 2 → 3）；包版本与程序集版本同步为 3.0.0；NuGet 包标识经用户确认回退为 `SiemensS7.NetCore`（第一轮 `Siemens.S7.NetCore` 停止使用，不再发布新版本），包文件为 `SiemensS7.NetCore.3.0.0.nupkg` / `.snupkg`；项目名称、程序集名与根命名空间保持不变 |
 | 2.1.0 | 2026-11-21 | 增加 net8.0 / net9.0 / net10.0 / net11.0 四框架支持；net10.0 为唯一全量测试框架，其余仅构建；依赖按框架主版本分组；包版本提升至 2.1.0；新增 S7Client 断线自动重连（默认关闭，含退避、等待与恢复元数据）；新增扁平 C# 结构体读写（`ReadStructAsync`/`WriteStructAsync`/`WriteStructResultAsync`、`S7StringFieldAttribute`、错误码 139/140）；新增 `S7.NetCore.Tools` WPF 调试工具首版（连接/字节/类型化/日志/自动重连 UI，`net10.0-windows`） |

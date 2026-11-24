@@ -25,9 +25,11 @@ public readonly record struct S7BatchWriteItem(
 /// <summary>
 /// 批量类型化读取条目。
 /// </summary>
-/// <param name="Address">地址表达式，规则与单点类型化读取一致。</param>
-/// <param name="DataType">十一种数据类型之一。</param>
-/// <param name="Capacity">字符串容量；非字符串必须为 0。</param>
+/// <param name="Address">
+/// 地址表达式，规则与单点类型化读取一致；可使用 <c>DBR</c>/<c>DBS</c>/<c>DBL</c> 容量后缀。
+/// </param>
+/// <param name="DataType">十一种数据类型之一；必须显式提供，容量后缀不会推导类型。</param>
+/// <param name="Capacity">字符串容量；地址已声明容量时 0 表示未提供，非 0 必须与地址容量相等。</param>
 public readonly record struct S7TypedReadBatchItem(
     string Address,
     S7DataType DataType,
@@ -36,10 +38,12 @@ public readonly record struct S7TypedReadBatchItem(
 /// <summary>
 /// 批量类型化写入条目。
 /// </summary>
-/// <param name="Address">地址表达式，规则与单点类型化写入一致。</param>
-/// <param name="DataType">十一种数据类型之一。</param>
+/// <param name="Address">
+/// 地址表达式，规则与单点类型化写入一致；可使用 <c>DBR</c>/<c>DBS</c>/<c>DBL</c> 容量后缀。
+/// </param>
+/// <param name="DataType">十一种数据类型之一；必须显式提供，容量后缀不会推导类型。</param>
 /// <param name="Value">待写入值。</param>
-/// <param name="Capacity">字符串容量；非字符串必须为 0。</param>
+/// <param name="Capacity">字符串容量；地址已声明容量时 0 表示未提供，非 0 必须与地址容量相等。</param>
 public readonly record struct S7TypedWriteBatchItem(
     string Address,
     S7DataType DataType,

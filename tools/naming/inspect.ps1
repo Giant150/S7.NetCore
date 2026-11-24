@@ -30,8 +30,10 @@ Check 'N-02' (-not ($legacyFiles | Where-Object { Test-Path $_ })) '旧项目/�
 
 $solutionPath = Join-Path $root 'S7.NetCore.sln'
 $solution = Get-Content -Raw -LiteralPath $solutionPath
-Check 'N-03' ($solution.Contains('src\S7.NetCore\S7.NetCore.csproj') -and $solution.Contains('tests\S7.NetCore.Tests\S7.NetCore.Tests.csproj')) '解决方案项目路径不正确'
+Check 'N-03' ($solution.Contains('src\S7.NetCore\S7.NetCore.csproj') -and $solution.Contains('tests\S7.NetCore.Tests\S7.NetCore.Tests.csproj') -and -not $solution.Contains('S7.NetCore.Tools')) '解决方案项目路径不正确或仍含工具工程'
 Check 'N-03b' (-not $solution.Contains('Snap7.NetCore')) '解决方案仍含旧名'
+$projectCount = ([regex]::Matches($solution, '\.csproj')).Count
+Check 'N-03c' ($projectCount -eq 2) "解决方案工程数应为 2，实际为 $projectCount"
 
 $mainProject = Get-Content -Raw -LiteralPath (Join-Path $root 'src/S7.NetCore/S7.NetCore.csproj')
 Check 'N-04' ($mainProject.Contains('<RootNamespace>S7.NetCore</RootNamespace>') -and $mainProject.Contains('<AssemblyName>S7.NetCore</AssemblyName>') -and $mainProject.Contains('<InternalsVisibleTo Include="S7.NetCore.Tests" />')) '主项目属性不正确'

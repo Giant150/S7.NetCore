@@ -7,35 +7,65 @@ namespace S7.NetCore.Internal;
 /// </summary>
 internal static class TypedRequestValidator
 {
-    internal static int ValidateRead(in S7TypedReadRequest request, in S7Address address)
+    internal static TypedValidationResult ValidateRead(in S7TypedReadRequest request, in S7Address address)
     {
         return ValidateCommon(request.DataType, request.Capacity, address);
     }
 
-    internal static int ValidateWrite(in S7TypedWriteRequest request, in S7Address address)
+    internal static TypedValidationResult ValidateWrite(in S7TypedWriteRequest request, in S7Address address)
     {
-        int occupied = ValidateCommon(request.DataType, request.Capacity, address);
+        TypedValidationResult validation = ValidateCommon(request.DataType, request.Capacity, address);
 
         if (address.Area == S7Area.Input)
         {
             throw Invalid(
                 S7ErrorCode.AreaNotSupported,
-                request.DataType,
+                validation.DataType,
                 address,
-                occupied,
+                validation.BytesOccupied,
                 "过程输入区不支持写入");
         }
 
-        ValidateValue(request.DataType, request.Value, request.Capacity, address, occupied);
-        return occupied;
+        ValidateValue(
+            validation.DataType,
+            request.Value,
+            validation.EffectiveCapacity,
+            address,
+            validation.BytesOccupied);
+        return validation;
     }
 
-    private static int ValidateCommon(S7DataType dataType, int capacity, in S7Address address)
+    private static TypedValidationResult ValidateCommon(S7DataType dataType, int capacity, in S7Address address)
     {
+        if (dataType == default)
+        {
+            throw Invalid(
+                S7ErrorCode.DataTypeAddressMismatch,
+                dataType,
+                address,
+                0,
+                $"类型未确定：地址形式 {address.Suffix} 必须显式提供数据类型");
+        }
+
         if (!Enum.IsDefined(dataType))
         {
             throw Invalid(S7ErrorCode.DataTypeNotSupported, dataType, address, 0, "数据类型不受支持");
         }
+
+        S7TypeRules.ValidateCompatibility(address, dataType);
+
+        if (S7StringSuffixRules.TryGetAllowedDataType(address.Suffix, out S7DataType allowed)
+            && allowed != dataType)
+        {
+            throw Invalid(
+                S7ErrorCode.DataTypeAddressMismatch,
+                dataType,
+                address,
+                0,
+                $"后缀 {address.Suffix} 仅允许数据类型 {allowed}，请求类型为 {dataType}");
+        }
+
+        int effectiveCapacity = S7StringSuffixRules.ResolveEffectiveCapacity(in address, capacity);
 
         bool isStringType = dataType is S7DataType.String
             or S7DataType.S7String
@@ -43,15 +73,15 @@ internal static class TypedRequestValidator
         if (isStringType)
         {
             S7WStringRules.GetCapacityLimits(dataType, out int minimum, out int maximum);
-            if (capacity < minimum || capacity > maximum)
+            if (effectiveCapacity < minimum || effectiveCapacity > maximum)
             {
                 throw Invalid(
                     S7ErrorCode.StringCapacityInvalid,
                     dataType,
                     address,
                     0,
-                    $"字符串容量 {capacity} 非法，必须为 {minimum}～{maximum} {S7WStringRules.GetCapacityUnit(dataType)}",
-                    capacity);
+                    $"字符串容量 {effectiveCapacity} 非法，必须为 {minimum}～{maximum} {S7WStringRules.GetCapacityUnit(dataType)}",
+                    effectiveCapacity);
             }
         }
         else if (capacity != 0)
@@ -64,10 +94,14 @@ internal static class TypedRequestValidator
                 $"非字符串类型的容量必须为 0，实际为 {capacity}");
         }
 
-        S7TypeRules.ValidateCompatibility(address, dataType);
-        int occupied = S7TypeRules.GetOccupiedBytes(dataType, capacity);
+        int occupied = S7TypeRules.GetOccupiedBytes(dataType, effectiveCapacity);
         S7TypeRules.ValidateOccupiedRange(address, occupied);
-        return occupied;
+        return new TypedValidationResult(
+            dataType,
+            isStringType ? effectiveCapacity : 0,
+            occupied,
+            address.Suffix,
+            address.AddressCapacity);
     }
 
     private static void ValidateValue(

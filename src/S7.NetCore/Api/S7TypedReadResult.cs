@@ -8,6 +8,12 @@ namespace S7.NetCore;
 /// <param name="Address">解析后的地址。</param>
 public readonly record struct S7TypedReadResult(S7Value Value, int BytesOccupied, S7Address Address)
 {
+    /// <summary>本次读取显式使用的数据类型（生效类型）。</summary>
+    public S7DataType DataType { get; init; }
+
+    /// <summary>本次读取使用的有效字符串容量；非字符串类型为 0。</summary>
+    public int EffectiveCapacity { get; init; }
+
     /// <summary>本次调用中因重连恢复的次数，取值 0 或 1。</summary>
     public int RecoveryCount { get; init; }
 

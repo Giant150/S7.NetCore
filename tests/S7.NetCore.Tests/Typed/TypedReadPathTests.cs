@@ -212,6 +212,70 @@ public sealed class TypedReadPathTests
         Assert.Null(entry.ProtocolTrace);
     }
 
+    [Fact]
+    public async Task ReadString_WithCapacitySuffix_UsesAddressCapacity()
+    {
+        var transport = new FakeTcpTransport();
+        "HELLO"u8.ToArray().CopyTo(transport.Memory, 13);
+        await using S7Client client = CreateClient(transport);
+        await client.ConnectAsync();
+
+        S7TypedReadResult result = await client.ReadValueAsync(
+            new S7TypedReadRequest("DB1.DBR13.15", S7DataType.String));
+
+        Assert.Equal("HELLO", result.Value.AsString());
+        Assert.Equal(15, result.BytesOccupied);
+        Assert.Equal(15, result.EffectiveCapacity);
+        Assert.Equal(S7DataType.String, result.DataType);
+        Assert.Equal(S7AddressSuffix.R, result.Address.Suffix);
+        Assert.Equal(15, result.Address.AddressCapacity);
+
+        ChunkBoundary chunk = Assert.Single(ChunkFrameInspector.ReadChunks(transport.ReceivedFrames));
+        Assert.Equal(13, chunk.StartByte);
+        Assert.Equal(15, chunk.Length);
+    }
+
+    [Fact]
+    public async Task ReadWString_WithCapacitySuffix_DecodesWideContent()
+    {
+        var transport = new FakeTcpTransport();
+        transport.Memory[13] = 0x00;
+        transport.Memory[14] = 0x0F;
+        transport.Memory[15] = 0x00;
+        transport.Memory[16] = 0x05;
+        Encoding.BigEndianUnicode.GetBytes("HELLO").CopyTo(transport.Memory, 17);
+        await using S7Client client = CreateClient(transport);
+        await client.ConnectAsync();
+
+        S7TypedReadResult result = await client.ReadValueAsync(
+            new S7TypedReadRequest("DB1.DBL13.15", S7DataType.S7WString));
+
+        Assert.Equal("HELLO", result.Value.AsString());
+        Assert.Equal(34, result.BytesOccupied);
+        Assert.Equal(15, result.EffectiveCapacity);
+        Assert.Equal(S7DataType.S7WString, result.DataType);
+        Assert.Equal(S7AddressSuffix.L, result.Address.Suffix);
+    }
+
+    [Fact]
+    public async Task ReadString_WithSuffix_DecodeFailure_AppendsCapacityContext()
+    {
+        var transport = new FakeTcpTransport();
+        transport.Memory[13] = 0x80;
+        await using S7Client client = CreateClient(transport);
+        await client.ConnectAsync();
+
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(
+            () => client.ReadValueAsync(new S7TypedReadRequest("DB1.DBR13.15", S7DataType.String)));
+
+        Assert.Equal(S7ErrorCode.NonAsciiStringData, exception.ErrorCode);
+        Assert.Contains("DB1.DBR13.15", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("后缀 R", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("地址容量 15", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("有效容量 15", exception.Message, StringComparison.Ordinal);
+        Assert.Contains("ASCII 字节", exception.Message, StringComparison.Ordinal);
+    }
+
     private static S7Client CreateClient(FakeTcpTransport transport)
     {
         return new S7Client(CreateOptions(), transport: transport);
