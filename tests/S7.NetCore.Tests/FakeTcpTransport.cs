@@ -27,6 +27,10 @@ internal sealed class FakeTcpTransport : ITcpTransport
 
     public TimeSpan ReadResponseDelay { get; set; }
 
+    public TimeSpan WriteResponseDelay { get; set; }
+
+    public TimeSpan DisposeDelay { get; set; }
+
     public Func<int, byte>? ReadReturnCodeProvider { get; set; }
 
     public Func<int, byte>? WriteReturnCodeProvider { get; set; }
@@ -94,7 +98,7 @@ internal sealed class FakeTcpTransport : ITcpTransport
         if (response is not null)
         {
             bool isRead = request.Length > 17 && request[17] == 0x04;
-            EnqueueResponse(response, isRead ? ReadResponseDelay : TimeSpan.Zero);
+            EnqueueResponse(response, isRead ? ReadResponseDelay : WriteResponseDelay);
         }
 
         return ValueTask.CompletedTask;
@@ -136,8 +140,13 @@ internal sealed class FakeTcpTransport : ITcpTransport
         }
     }
 
-    public ValueTask DisposeAsync()
+    public async ValueTask DisposeAsync()
     {
+        if (DisposeDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(DisposeDelay).ConfigureAwait(false);
+        }
+
         _open = false;
         lock (_sync)
         {
@@ -153,7 +162,7 @@ internal sealed class FakeTcpTransport : ITcpTransport
         {
         }
 
-        return ValueTask.CompletedTask;
+        return;
     }
 
     private void EnqueueResponse(byte[] response, TimeSpan delay)

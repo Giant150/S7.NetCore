@@ -239,13 +239,28 @@ public sealed class TypedLogTests
         bool succeeded,
         S7DataType? dataType = null)
     {
-        return logger.Records
-            .Where(record => record.Entry.Operation == operation
-                && record.Entry.Succeeded == succeeded
-                && record.Entry.AddressExpression is not null
-                && (dataType is null || record.Entry.DataType == dataType))
-            .Select(record => record.Entry)
-            .Last();
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(2);
+        while (true)
+        {
+            S7LogEntry[] matches = logger.SnapshotEntries()
+                .Where(entry => entry.Operation == operation
+                    && entry.Succeeded == succeeded
+                    && entry.AddressExpression is not null
+                    && (dataType is null || entry.DataType == dataType))
+                .ToArray();
+
+            if (matches.Length > 0)
+            {
+                return matches[^1];
+            }
+
+            if (DateTimeOffset.UtcNow > deadline)
+            {
+                throw new TimeoutException("等待日志条目超时。");
+            }
+
+            Thread.Sleep(10);
+        }
     }
 
     private static void PrepareWStringMemory(byte[] memory)

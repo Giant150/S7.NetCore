@@ -106,7 +106,11 @@ public sealed class ReconnectTests
         Assert.Equal(S7ErrorCode.ConnectionReset, exception.ErrorCode);
         Assert.Equal(S7OperationStage.Read, exception.Stage);
 
-        await WaitUntilAsync(() => client.State == S7SessionState.Connected && fake.ConnectedCount >= 2);
+        await WaitUntilAsync(() => client.State == S7SessionState.Connected
+            && fake.ConnectedCount >= 2
+            && states.Contains(S7SessionState.Reconnecting)
+            && states.Count > 0
+            && states[^1] == S7SessionState.Connected);
 
         ReadOnlyMemory<byte> data = await client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
         Assert.Equal(new byte[] { 0x12, 0x34, 0x56, 0x78 }, data.ToArray());

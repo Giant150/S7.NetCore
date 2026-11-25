@@ -284,6 +284,6 @@ ValidateWriteCapacity(wires);
             Succeeded = false,
             ErrorCode = exception.ErrorCode
         };
-        _logger.Log(S7LogLevel.Warning, in entry, exception);
+        _session.PostFailureLog(S7LogLevel.Warning, in entry, exception);
     }
 }

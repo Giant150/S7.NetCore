@@ -233,7 +233,14 @@ public sealed partial class S7Client
             MappedFieldCount = fieldCount
         };
 
-        _logger.Log(level, in entry, exception);
+        if (succeeded)
+        {
+            _logger.Log(level, in entry, exception);
+        }
+        else
+        {
+            _session.PostFailureLog(level, in entry, exception);
+        }
     }
 
     private static string StructContext(Type structType, in S7Address address, int totalLength)

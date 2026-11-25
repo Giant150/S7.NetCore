@@ -12,6 +12,16 @@ internal sealed class TestLogger : IS7Logger
 
     public bool ThrowOnUse { get; set; }
 
+    public TimeSpan LogDelay { get; set; }
+
+    public S7LogEntry[] SnapshotEntries()
+    {
+        lock (_sync)
+        {
+            return Entries.ToArray();
+        }
+    }
+
     public bool IsEnabled(S7LogLevel level)
     {
         if (ThrowOnUse)
@@ -27,6 +37,11 @@ internal sealed class TestLogger : IS7Logger
         if (ThrowOnUse)
         {
             throw new InvalidOperationException("logger failure");
+        }
+
+        if (LogDelay > TimeSpan.Zero)
+        {
+            Thread.Sleep(LogDelay);
         }
 
         lock (_sync)

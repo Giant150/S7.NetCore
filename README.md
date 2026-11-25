@@ -453,7 +453,7 @@ dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.
 
 # 校验四框架产物与 NuGet 包
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
-pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.5.0.0.nupkg
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.5.1.0.nupkg
 ```
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
@@ -494,13 +494,13 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 593 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| net10.0 全量测试 | 608 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
 | 结构体读写用例 | 覆盖契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志，以及 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
-| 自动重连用例 | 17 项（含参数化）：默认开关与公开契约、固定退避、断线返回原错误、后台立即首连、重连中 204/603、写入不重放、快照、1 秒内中止、201、日志、超时保持连接；同时移除批量/类型化/结构体结果的重连元数据断言 |
+| 自动重连用例 | 32 项（含参数化）：默认开关与公开契约、固定退避、断线返回原错误、后台立即首连、重连中 204/603、写入不重放、快照、1 秒内中止、201、日志、超时保持连接；5.1.0 新增 15 项快速失败时序用例，覆盖订阅方/日志/传输关闭阻塞、迁移单次、排队终结、分包读/写中途、批量零发送、取消优先、通知顺序、释放终止；同时移除批量/类型化/结构体结果的重连元数据断言 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| 版本 5.0.0 | `VersionPrefix` = `5.0.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.5.0.0.nupkg` / `.snupkg` |
+| 版本 5.1.0 | `VersionPrefix` = `5.1.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.5.1.0.nupkg` / `.snupkg` |
 | 批量读写用例 | 覆盖容量边界、写重叠、请求校验、多条目协议编解码、结果装配、字节/类型化门面端到端、超时/取消/断线原错返回与重连后继续 |
-| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `5.0.0` |
+| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `5.1.0` |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
@@ -545,9 +545,16 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
   - 所有结果类型移除 `RecoveryCount` / `Retried` / `ReplayAttempted` / `ReplayedBytes`；删除 `ReconnectEvent` 与 `S7ReconnectEventArgs`；`SessionSnapshot` 仅保留 `State` / `SessionId` / `NegotiatedPduSize` / `AutoReconnectEnabled`。
   - 默认开启后，断线会短暂进入 `Reconnecting`，期间读写返回 204；断线当次调用仍返回原错误。`106` / `604` / `605` 保留数值但不再产生。
   - 读写超时（601/602）后保持 `Connected` 并复用连接，不触发重连、不关闭连接、不置 `Faulted`。
+- 自动重连 5.1.0 时序强化：
+  - 断线当次调用在故障判定后立即返回原错误，不等待旧连接关闭、状态通知派发、后台重连启动或失败日志写出。
+  - 重连期间任意读写（含排队中与分包/批量中途）立即返回 204；分包读在下一帧发送前中止并丢弃已读分片，分包写返回 204 时携带已确认写入进度与结果不确定标记。
+  - 批量请求在发送前转入重连中时零发送返回 204；取消优先返回 603。
+  - 释放/断开可终结排队与分包中途请求（≤1 秒），不挂起。
+  - 公开 API、错误码、会话状态集合、快照/日志字段与 601/602 超时语义均不变。
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 5.1.0 | 2026-11-25 | 断线快速失败时序强化：断线当次调用立即返回原错误（不等待旧连接关闭/通知派发/后台启动/失败日志写出）；重连期间读写立即 204（含排队中与分包/批量中途），中途读丢弃分片、中途写携带已确认进度与不确定标记；释放/断开可终结排队与中途请求（≤1 秒）；公开 API/错误码/状态集合/快照与日志字段/601-602 超时语义不变；失败日志改为后台串行写出，成功/信息/调试/重连日志保持同步；版本提升至 5.1.0 |
 | 5.0.0 | 2026-11-25 | 简化断线自动重连：只保留 `S7ConnectionOptions.AutoReconnectEnabled` 一个开关并默认开启；断线当次调用立即返回原错误、后台立即首次重连（首次延迟 0），失败后固定 `1s → 2s → 4s → 8s → 16s → 30s` 退避，无次数上限；重连期间读写立即返回 204、不等待；写入永不重放；删除 `S7ReconnectPolicy` 的 8 项策略、`ReconnectEvent`、`S7ReadResult`/`S7WriteResult` 及所有结果中的重连元数据；快照精简为 4 个字段；`106`/`604`/`605` 保留数值不再产生；读写超时后保持已连接并复用连接；主版本升至 5.0.0 |
 | 4.1.0 | 2026-11-24 | 新增字符串容量后缀地址：`DB1.DBR13.15`（String）、`DB1.DBS13.15`（S7String）、`DB1.DBL13.15`（S7WString）；后缀仅限定允许类型，`DataType` 仍必须显式提供，缺失或不一致返回 133；地址容量与 `Capacity` 同时提供时，0 取地址容量、非 0 必须相等，否则 136；仅 `DBn.` 前缀支持；`DB1.DBB13.15` 仍按 131 拒绝，结构体新后缀按 140 拒绝；删除 `S7.NetCore.Tools` 工具项目（解决方案 3→2）；版本提升至 4.1.0 |
 | 4.0.0 | 2026-11-24 | 新增公开批量读写 API：字节视图 `ReadBatchAsync`/`WriteBatchAsync` 与类型化视图 `ReadTypedBatchAsync`/`WriteTypedBatchAsync`，一次批量调用 = 1 个请求帧 + 1 个响应帧；条目数由当前 PDU 与协议 255 计数字段决定，超限整批拒绝并由调用方分组（PDU 超限 142、条目数超限 146）；部分失败默认不抛异常，`EnsureAllSucceeded()` 为可选出口；批量写条目目标区间重叠禁止（143）；新增 `S7BatchReadItem`/`S7BatchWriteItem`/`S7TypedReadBatchItem`/`S7TypedWriteBatchItem` 与对应结果类型、`S7BatchItemFailure`、错误码 141～146；除已声明的 `As<T>()` → `ToValue<T>` 迁移与字符串标注精确化外，既有 API 不变；单点读取内部实现（含 `S7Value` 承载）允许变更但对外契约不变；字符串结果标注精确化为 `String`/`S7String`/`S7WString`（`StringEncoding`），`S7Value` 承载扩展为已声明行为变更；主版本升级对应上述新增与行为变更 |
