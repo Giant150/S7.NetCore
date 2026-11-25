@@ -2,116 +2,69 @@ namespace S7.NetCore.Internal;
 
 internal sealed partial class S7Session
 {
-    internal async Task<BatchReadRawResult> ReadBatchAsync(
+    internal async Task<BatchReadRawItem[]> ReadBatchAsync(
         IReadOnlyList<BatchWireItem> items,
         CancellationToken cancellationToken)
     {
-        int recovery = 0;
-        while (true)
+        BatchReadRawItem[] raw = await ReadBatchOnceAsync(items, cancellationToken).ConfigureAwait(false);
+        int failed = 0;
+        for (int i = 0; i < raw.Length; i++)
         {
-            try
+            if (!raw[i].Succeeded)
             {
-                BatchReadRawItem[] raw = await ReadBatchOnceAsync(items, recovery == 0, cancellationToken)
-                    .ConfigureAwait(false);
-                int failed = 0;
-                for (int i = 0; i < raw.Length; i++)
-                {
-                    if (!raw[i].Succeeded)
-                    {
-                        failed++;
-                    }
-                }
-
-                LogBatch(
-                    new OperationScope(),
-                    "Read",
-                    S7OperationStage.Read,
-                    failed == 0,
-                    items.Count,
-                    items.Count - failed,
-                    failed,
-                    TotalBytes(items));
-                return new BatchReadRawResult(raw, recovery, recovery > 0);
-            }
-            catch (S7ClientException exception) when (recovery == 0 && ShouldRecover(exception))
-            {
-                await WaitForRecoveryAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
-                recovery = 1;
+                failed++;
             }
         }
+
+        LogBatch(
+            new OperationScope(),
+            "Read",
+            S7OperationStage.Read,
+            failed == 0,
+            items.Count,
+            items.Count - failed,
+            failed,
+            TotalBytes(items));
+        return raw;
     }
 
-    internal async Task<BatchWriteRawResult> WriteBatchAsync(
+    internal async Task<BatchWriteRawItem[]> WriteBatchAsync(
         IReadOnlyList<BatchWireItem> items,
         CancellationToken cancellationToken)
     {
-        int recovery = 0;
-        bool replayAttempted = false;
-        int totalBytes = TotalBytes(items);
-
-        while (true)
+        BatchWriteRawItem[] raw = await WriteBatchOnceAsync(items, cancellationToken).ConfigureAwait(false);
+        int failed = 0;
+        for (int i = 0; i < raw.Length; i++)
         {
-            try
+            if (raw[i].ReturnCode != ProtocolConstants.SuccessReturnCode)
             {
-                BatchWriteRawItem[] raw = await WriteBatchOnceAsync(items, recovery == 0, cancellationToken)
-                    .ConfigureAwait(false);
-                int failed = 0;
-                int written = 0;
-                for (int i = 0; i < raw.Length; i++)
-                {
-                    if (raw[i].ReturnCode == ProtocolConstants.SuccessReturnCode)
-                    {
-                        written += items[i].Length;
-                    }
-                    else
-                    {
-                        failed++;
-                    }
-                }
-
-                LogBatch(
-                    new OperationScope(),
-                    "Write",
-                    S7OperationStage.Write,
-                    failed == 0,
-                    items.Count,
-                    items.Count - failed,
-                    failed,
-                    totalBytes);
-                return new BatchWriteRawResult(
-                    raw,
-                    recovery,
-                    recovery > 0,
-                    replayAttempted,
-                    replayAttempted ? totalBytes : 0,
-                    written);
-            }
-            catch (S7ClientException exception) when (recovery == 0 && ShouldRecover(exception))
-            {
-                if (exception.WriteOutcomeUncertain && !_reconnect.ReplayUncertainWrites)
-                {
-                    throw;
-                }
-
-                replayAttempted = exception.WriteOutcomeUncertain;
-                await WaitForRecoveryAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
-                recovery = 1;
+                failed++;
             }
         }
+
+        LogBatch(
+            new OperationScope(),
+            "Write",
+            S7OperationStage.Write,
+            failed == 0,
+            items.Count,
+            items.Count - failed,
+            failed,
+            TotalBytes(items));
+        return raw;
     }
 
     private async Task<BatchReadRawItem[]> ReadBatchOnceAsync(
         IReadOnlyList<BatchWireItem> items,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        await EnsureConnectedAsync(S7OperationStage.Read, allowWait, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
         using RequestGate.Lease lease = await AcquireGateAsync(
                 S7OperationStage.Read,
                 DescribeBatch("读取", items),
                 cancellationToken)
             .ConfigureAwait(false);
-        await EnsureConnectedAsync(S7OperationStage.Read, allowWait: false, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
         BatchCapacityCalculator.ValidateRead(items, NegotiatedPduSize);
 
         var scope = new OperationScope();
@@ -134,21 +87,7 @@ internal sealed partial class S7Session
         }
         catch (OperationCanceledException ex)
         {
-            if (!timeout.CallerTriggered && _reconnect.ReconnectOnTimeout)
-            {
-                await HandleFaultAsync(
-                        transport,
-                        S7OperationStage.Read,
-                        S7ErrorCode.ReadTimeout,
-                        S7ErrorCategory.Timeout,
-                        callerCancelled: false)
-                    .ConfigureAwait(false);
-            }
-            else if (!timeout.CallerTriggered)
-            {
-                await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-            }
-            else
+            if (timeout.CallerTriggered)
             {
                 bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Read).ConfigureAwait(false);
                 if (!drained)
@@ -194,16 +133,15 @@ internal sealed partial class S7Session
 
     private async Task<BatchWriteRawItem[]> WriteBatchOnceAsync(
         IReadOnlyList<BatchWireItem> items,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
         using RequestGate.Lease lease = await AcquireGateAsync(
                 S7OperationStage.Write,
                 DescribeBatch("写入", items),
                 cancellationToken)
             .ConfigureAwait(false);
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait: false, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
         BatchCapacityCalculator.ValidateWrite(items, NegotiatedPduSize);
 
         var scope = new OperationScope();
@@ -228,21 +166,7 @@ internal sealed partial class S7Session
         }
         catch (OperationCanceledException ex)
         {
-            if (!timeout.CallerTriggered && _reconnect.ReconnectOnTimeout)
-            {
-                await HandleFaultAsync(
-                        transport,
-                        S7OperationStage.Write,
-                        S7ErrorCode.WriteTimeout,
-                        S7ErrorCategory.Timeout,
-                        callerCancelled: false)
-                    .ConfigureAwait(false);
-            }
-            else if (!timeout.CallerTriggered)
-            {
-                await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-            }
-            else
+            if (timeout.CallerTriggered)
             {
                 bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Write).ConfigureAwait(false);
                 if (!drained)

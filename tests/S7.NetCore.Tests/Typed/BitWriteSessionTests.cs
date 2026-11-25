@@ -55,7 +55,7 @@ public sealed class BitWriteSessionTests
     }
 
     [Fact]
-    public async Task BitWrite_Timeout_MarksFaultedAndUncertain()
+    public async Task BitWrite_Timeout_KeepsConnectedAndUncertain()
     {
         var options = CreateOptions() with { WriteTimeout = TimeSpan.FromSeconds(1) };
         var transport = new FakeTcpTransport();
@@ -73,7 +73,7 @@ public sealed class BitWriteSessionTests
         Assert.Equal(S7ErrorCategory.Timeout, exception.Category);
         Assert.Equal(S7ErrorCode.WriteTimeout, exception.ErrorCode);
         Assert.True(exception.WriteOutcomeUncertain);
-        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.Equal(S7SessionState.Connected, client.State);
     }
 
     [Fact]

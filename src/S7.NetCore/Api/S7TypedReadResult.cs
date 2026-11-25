@@ -13,10 +13,4 @@ public readonly record struct S7TypedReadResult(S7Value Value, int BytesOccupied
 
     /// <summary>本次读取使用的有效字符串容量；非字符串类型为 0。</summary>
     public int EffectiveCapacity { get; init; }
-
-    /// <summary>本次调用中因重连恢复的次数，取值 0 或 1。</summary>
-    public int RecoveryCount { get; init; }
-
-    /// <summary>是否在重连恢复后重试并成功。</summary>
-    public bool Retried { get; init; }
 }

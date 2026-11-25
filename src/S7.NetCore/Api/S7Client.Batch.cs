@@ -17,7 +17,7 @@ public sealed partial class S7Client
         {
             List<BatchWireItem> wires = BatchRequestValidator.ValidateRead(items);
             ValidateReadCapacity(wires);
-            BatchReadRawResult raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
+            BatchReadRawItem[] raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             return BuildReadResult(raw, items.Count);
         }
         catch (S7ClientException exception)
@@ -40,7 +40,7 @@ public sealed partial class S7Client
         {
             List<BatchWireItem> wires = BatchRequestValidator.ValidateWrite(items);
             ValidateWriteCapacity(wires);
-            BatchWriteRawResult raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
+            BatchWriteRawItem[] raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             return BuildWriteResult(raw, wires);
         }
         catch (S7ClientException exception)
@@ -64,7 +64,7 @@ public sealed partial class S7Client
             List<BatchTypedReadPlan> plans = BatchRequestValidator.ValidateTypedRead(items);
             BatchWireItem[] wires = plans.Select(static plan => plan.Wire).ToArray();
             ValidateReadCapacity(wires);
-            BatchReadRawResult raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
+            BatchReadRawItem[] raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             S7BatchReadResult byteResult = BuildReadResult(raw, plans.Count);
             return BuildTypedReadResult(plans, raw, byteResult);
         }
@@ -88,8 +88,8 @@ public sealed partial class S7Client
         {
             List<BatchTypedWritePlan> plans = BatchRequestValidator.ValidateTypedWrite(items);
             BatchWireItem[] wires = plans.Select(static plan => plan.Wire).ToArray();
-            ValidateWriteCapacity(wires);
-            BatchWriteRawResult raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
+ValidateWriteCapacity(wires);
+            BatchWriteRawItem[] raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             S7BatchWriteResult byteResult = BuildWriteResult(raw, wires);
             return BuildTypedWriteResult(plans, raw, byteResult);
         }
@@ -116,13 +116,13 @@ public sealed partial class S7Client
         }
     }
 
-    private static S7BatchReadResult BuildReadResult(BatchReadRawResult raw, int itemCount)
+    private static S7BatchReadResult BuildReadResult(BatchReadRawItem[] raw, int itemCount)
     {
         var results = new S7BatchReadItemResult[itemCount];
         var failures = new List<S7BatchItemFailure>();
         for (int i = 0; i < itemCount; i++)
         {
-            BatchReadRawItem item = raw.Items[i];
+            BatchReadRawItem item = raw[i];
             results[i] = new S7BatchReadItemResult(
                 i,
                 item.Succeeded,
@@ -138,16 +138,17 @@ public sealed partial class S7Client
             }
         }
 
-        return new S7BatchReadResult(results, failures, raw.RecoveryCount, raw.Retried);
+        return new S7BatchReadResult(results, failures);
     }
 
-    private static S7BatchWriteResult BuildWriteResult(BatchWriteRawResult raw, IReadOnlyList<BatchWireItem> wires)
+    private static S7BatchWriteResult BuildWriteResult(BatchWriteRawItem[] raw, IReadOnlyList<BatchWireItem> wires)
     {
         var results = new S7BatchWriteItemResult[wires.Count];
         var failures = new List<S7BatchItemFailure>();
+        int bytesWritten = 0;
         for (int i = 0; i < wires.Count; i++)
         {
-            byte returnCode = raw.Items[i].ReturnCode;
+            byte returnCode = raw[i].ReturnCode;
             bool succeeded = returnCode == ProtocolConstants.SuccessReturnCode;
             S7ErrorCode? errorCode = null;
             if (!succeeded)
@@ -155,6 +156,10 @@ public sealed partial class S7Client
                 (S7ErrorCode code, _) = PlcReturnCodeMapper.Map(returnCode);
                 errorCode = code;
                 failures.Add(new S7BatchItemFailure(i, code, returnCode));
+            }
+            else
+            {
+                bytesWritten += wires[i].Length;
             }
 
             results[i] = new S7BatchWriteItemResult(
@@ -165,19 +170,12 @@ public sealed partial class S7Client
                 succeeded ? null : returnCode);
         }
 
-        return new S7BatchWriteResult(
-            results,
-            failures,
-            raw.BytesWritten,
-            raw.RecoveryCount,
-            raw.Retried,
-            raw.ReplayAttempted,
-            raw.ReplayedBytes);
+        return new S7BatchWriteResult(results, failures, bytesWritten);
     }
 
     private static S7TypedBatchReadResult BuildTypedReadResult(
         IReadOnlyList<BatchTypedReadPlan> plans,
-        BatchReadRawResult raw,
+        BatchReadRawItem[] raw,
         S7BatchReadResult byteResult)
     {
         var results = new S7TypedReadBatchItemResult[plans.Count];
@@ -186,7 +184,7 @@ public sealed partial class S7Client
         for (int i = 0; i < plans.Count; i++)
         {
             BatchTypedReadPlan plan = plans[i];
-            BatchReadRawItem rawItem = raw.Items[i];
+            BatchReadRawItem rawItem = raw[i];
             bool succeeded = rawItem.Succeeded;
             S7Value value = default;
             S7ErrorCode? errorCode = rawItem.ErrorCode;
@@ -239,13 +237,13 @@ public sealed partial class S7Client
 
     private static S7TypedBatchWriteResult BuildTypedWriteResult(
         IReadOnlyList<BatchTypedWritePlan> plans,
-        BatchWriteRawResult raw,
+        BatchWriteRawItem[] raw,
         S7BatchWriteResult byteResult)
     {
         var results = new S7TypedWriteBatchItemResult[plans.Count];
         for (int i = 0; i < plans.Count; i++)
         {
-            byte returnCode = raw.Items[i].ReturnCode;
+            byte returnCode = raw[i].ReturnCode;
             bool succeeded = returnCode == ProtocolConstants.SuccessReturnCode;
             S7ErrorCode? errorCode = null;
             if (!succeeded)

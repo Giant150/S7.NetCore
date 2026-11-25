@@ -35,8 +35,6 @@ public sealed class S7ClientTest
         Assert.Null(result.Items[0].PlcReturnCode);
         Assert.Equal(1, result.Items[1].Index);
         Assert.Equal(new byte[] { 0x99, 0x88 }, result.Items[1].Data.ToArray());
-        Assert.Equal(0, result.RecoveryCount);
-        Assert.False(result.Retried);
         Assert.Equal(1, simulator.ReadFrameCount);
         Assert.Equal(0, simulator.WriteFrameCount);
 
@@ -120,8 +118,6 @@ public sealed class S7ClientTest
         Assert.Equal(5, result.BytesWritten);
         Assert.Equal(3, result.Items[0].BytesWritten);
         Assert.Equal(2, result.Items[1].BytesWritten);
-        Assert.False(result.ReplayAttempted);
-        Assert.Equal(0, result.ReplayedBytes);
         Assert.Equal(new byte[] { 0x01, 0x02, 0x03 }, simulator.Memory[..3]);
         Assert.Equal(new byte[] { 0xAA, 0xBB }, simulator.Memory[10..12]);
         Assert.Equal(1, simulator.WriteFrameCount);
@@ -397,7 +393,7 @@ public sealed class S7ClientTest
     }
 
     [Fact]
-    public async Task ReadBatchAsync_Timeout_ThrowsReadTimeoutAndClosesSession()
+    public async Task ReadBatchAsync_Timeout_ThrowsReadTimeoutAndKeepsSession()
     {
         var simulator = new BatchPlcSimulator { SuppressReadResponses = true };
 
@@ -411,7 +407,7 @@ public sealed class S7ClientTest
         Assert.Equal(S7ErrorCategory.Timeout, error.Category);
         Assert.Equal(S7OperationStage.Read, error.Stage);
         Assert.False(error.WriteOutcomeUncertain);
-        Assert.False(client.IsConnected);
+        Assert.True(client.IsConnected);
     }
 
     [Fact]
@@ -430,6 +426,7 @@ public sealed class S7ClientTest
         Assert.Equal(S7OperationStage.Write, error.Stage);
         Assert.True(error.WriteOutcomeUncertain);
         Assert.Equal(1, simulator.WriteFrameCount);
+        Assert.True(client.IsConnected);
     }
 
     [Fact]
@@ -491,7 +488,7 @@ public sealed class S7ClientTest
     }
 
     [Fact]
-    public async Task ReadBatchAsync_ConnectionLoss_RecoversAndRetriesWholeBatchOnce()
+    public async Task ReadBatchAsync_ConnectionLoss_Returns301_ThenNextBatchSucceeds()
     {
         var simulator = new BatchPlcSimulator { FailFirstReadOnce = true };
         var options = new S7ConnectionOptions
@@ -500,21 +497,22 @@ public sealed class S7ClientTest
             CpuType = S7CpuType.S71200,
             Rack = 0,
             Slot = 1,
-            Port = 102,
-            Reconnect = new S7ReconnectPolicy
-            {
-                AutoReconnectEnabled = true,
-                MaxAttempts = 3,
-                InitialDelay = TimeSpan.FromMilliseconds(100),
-                MaxDelay = TimeSpan.FromSeconds(1),
-                JitterFactor = 0,
-                WaitTimeout = TimeSpan.FromSeconds(5)
-            }
+            Port = 102
         };
 
         await using var client = new S7Client(options, logger: null, transport: simulator);
         await client.ConnectAsync();
 
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBatchAsync(
+            [
+                new S7BatchReadItem(S7Area.DataBlock, 1, 0, 2),
+                new S7BatchReadItem(S7Area.DataBlock, 1, 4, 2)
+            ]));
+
+        Assert.Equal(S7ErrorCode.ConnectionReset, error.ErrorCode);
+
+        await WaitUntilAsync(() => client.IsConnected);
         S7BatchReadResult result = await client.ReadBatchAsync(
         [
             new S7BatchReadItem(S7Area.DataBlock, 1, 0, 2),
@@ -522,9 +520,6 @@ public sealed class S7ClientTest
         ]);
 
         Assert.True(result.AllSucceeded);
-        Assert.Equal(1, result.RecoveryCount);
-        Assert.True(result.Retried);
-        Assert.Equal(2, simulator.ReadFrameCount);
         Assert.True(client.IsConnected);
     }
 
@@ -548,51 +543,21 @@ public sealed class S7ClientTest
         Assert.Equal(S7OperationStage.Read, error.Stage);
     }
 
-    [Fact]
-    public async Task WriteBatchAsync_UncertainOutcomeWithReplay_ReplaysWholeBatch()
-    {
-        var simulator = new BatchPlcSimulator { SuppressFirstWriteOnce = true };
-        var options = new S7ConnectionOptions
-        {
-            IpAddress = "127.0.0.1",
-            CpuType = S7CpuType.S71200,
-            Rack = 0,
-            Slot = 1,
-            Port = 102,
-            WriteTimeout = TimeSpan.FromSeconds(1),
-            Reconnect = new S7ReconnectPolicy
-            {
-                AutoReconnectEnabled = true,
-                MaxAttempts = 3,
-                InitialDelay = TimeSpan.FromMilliseconds(100),
-                MaxDelay = TimeSpan.FromSeconds(1),
-                JitterFactor = 0,
-                WaitTimeout = TimeSpan.FromSeconds(5),
-                ReconnectOnTimeout = true,
-                ReplayUncertainWrites = true
-            }
-        };
-
-        await using var client = new S7Client(options, logger: null, transport: simulator);
-        await client.ConnectAsync();
-
-        S7BatchWriteResult result = await client.WriteBatchAsync(
-        [
-            new S7BatchWriteItem(S7Area.DataBlock, 1, 0, new byte[] { 0x01, 0x02 }),
-            new S7BatchWriteItem(S7Area.Memory, 0, 8, new byte[] { 0x03 })
-        ]);
-
-        Assert.True(result.AllSucceeded);
-        Assert.True(result.ReplayAttempted);
-        Assert.Equal(3, result.ReplayedBytes);
-        Assert.Equal(1, result.RecoveryCount);
-        Assert.True(result.Retried);
-        Assert.Equal(2, simulator.WriteFrameCount);
-        Assert.Equal(new byte[] { 0x01, 0x02 }, simulator.Memory[..2]);
-        Assert.Equal(0x03, simulator.Memory[8]);
-    }
-
     private const byte ProtocolConstantsSuccess = 0xFF;
+
+    private static async Task WaitUntilAsync(Func<bool> condition)
+    {
+        DateTimeOffset deadline = DateTimeOffset.UtcNow + TimeSpan.FromSeconds(5);
+        while (!condition())
+        {
+            if (DateTimeOffset.UtcNow > deadline)
+            {
+                throw new TimeoutException("等待条件超时。");
+            }
+
+            await Task.Delay(10);
+        }
+    }
 
     private static S7Client CreateClient(
         BatchPlcSimulator simulator,

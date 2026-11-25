@@ -143,7 +143,7 @@ public enum S7ErrorCode
     /// <summary>PDU 申请值超出 240 至 960。</summary>
     InvalidPduSize = 105,
 
-    /// <summary>重连策略项非法（尝试次数、退避倍数、抖动比例或上下限关系不满足）。</summary>
+    /// <summary>保留占位，本版不再产生，数值禁止复用。</summary>
     InvalidReconnectPolicy = 106,
 
     /// <summary>DB 号非法。</summary>
@@ -173,7 +173,7 @@ public enum S7ErrorCode
     /// <summary>请求队列超出上限。</summary>
     QueueOverflow = 203,
 
-    /// <summary>连接中断，正在自动重连且等待窗口已到期或为零。</summary>
+    /// <summary>会话正在自动重连，请求无法执行。</summary>
     SessionReconnecting = 204,
 
     /// <summary>TCP 连接失败。</summary>
@@ -227,19 +227,25 @@ public enum S7ErrorCode
     /// <summary>连接超时。</summary>
     ConnectTimeout = 600,
 
-    /// <summary>读取超时。</summary>
+    /// <summary>
+    /// 读取超时。不触发重连、不关闭连接、不改变会话状态；超时后保持已连接并复用同一条连接，
+    /// 其后读写继续在既有连接上执行，该行为与开关取值无关。
+    /// </summary>
     ReadTimeout = 601,
 
-    /// <summary>写入超时。</summary>
+    /// <summary>
+    /// 写入超时。不触发重连、不关闭连接、不改变会话状态、不重放写入；超时后保持已连接并复用同一条连接，
+    /// 其后读写继续在既有连接上执行，该行为与开关取值无关。
+    /// </summary>
     WriteTimeout = 602,
 
     /// <summary>调用方取消。</summary>
     OperationCancelled = 603,
 
-    /// <summary>重连尝试次数耗尽，会话回到未连接。</summary>
+    /// <summary>保留占位，本版不再产生，数值禁止复用。</summary>
     ReconnectExhausted = 604,
 
-    /// <summary>重连被显式断开或客户端释放中止。</summary>
+    /// <summary>保留占位，本版不再产生，数值禁止复用。</summary>
     ReconnectAborted = 605,
 
     /// <summary>地址表达式语法非法（空、内部空白、长度超过 64、非 ASCII、负号、非法分隔符或后缀组合）。</summary>

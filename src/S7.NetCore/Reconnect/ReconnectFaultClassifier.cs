@@ -6,31 +6,18 @@ namespace S7.NetCore.Internal;
 internal static class ReconnectFaultClassifier
 {
     /// <summary>
-    /// 按固定顺序判定：策略启用 → 故障前状态为已连接 → 非调用方取消 → 仅连接类故障或允许的超时。
+    /// 按固定顺序判定：开关启用 → 故障前状态为已连接 → 非调用方取消 → 仅连接类故障。
+    /// 超时不属于连接类故障，永不返回 <see langword="true"/>。
     /// </summary>
     internal static bool ShouldReconnect(
-        S7ReconnectPolicy policy,
+        bool autoReconnectEnabled,
         S7SessionState stateBefore,
         bool callerCancelled,
-        S7ErrorCategory category,
-        S7OperationStage stage)
+        S7ErrorCategory category)
     {
-        if (!policy.AutoReconnectEnabled || callerCancelled || stateBefore != S7SessionState.Connected)
-        {
-            return false;
-        }
-
-        if (category == S7ErrorCategory.Connection)
-        {
-            return true;
-        }
-
-        if (category == S7ErrorCategory.Timeout)
-        {
-            return policy.ReconnectOnTimeout
-                || stage is S7OperationStage.Connect or S7OperationStage.CotpConnect or S7OperationStage.S7Setup;
-        }
-
-        return false;
+        return autoReconnectEnabled
+            && !callerCancelled
+            && stateBefore == S7SessionState.Connected
+            && category == S7ErrorCategory.Connection;
     }
 }

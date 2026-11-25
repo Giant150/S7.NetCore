@@ -14,7 +14,7 @@ public sealed partial class S7Client
     /// </summary>
     /// <param name="request">类型化读取请求。</param>
     /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>解码后的值、占用字节数与解析后的地址；并携带重连恢复元数据。</returns>
+    /// <returns>解码后的值、占用字节数与解析后的地址。</returns>
     /// <exception cref="S7ClientException">
     /// 地址或类型非法（<see cref="S7ErrorCategory.InvalidArgument"/>）、PLC 返回错误、
     /// 协议数据非法（404/406/407/408/409）、超时或取消。失败时不返回任何部分值。
@@ -53,11 +53,11 @@ public sealed partial class S7Client
         {
             if (validation.DataType == S7DataType.Bool)
             {
-                S7ReadResult readResult = await ReadBytesResultAsync(
+                ReadOnlyMemory<byte> bitData = await ReadBytesAsync(
                     new S7ReadRequest(address.Area, address.DbNumber, address.StartByte, 1),
                     cancellationToken).ConfigureAwait(false);
 
-                bool bit = (readResult.Data.Span[0] & (1 << address.BitNumber!.Value)) != 0;
+                bool bit = (bitData.Span[0] & (1 << address.BitNumber!.Value)) != 0;
                 S7Value boolValue = S7Value.FromBool(bit);
                 LogTyped(
                     "Read",
@@ -72,19 +72,17 @@ public sealed partial class S7Client
                 return new S7TypedReadResult(boolValue, 1, address)
                 {
                     DataType = validation.DataType,
-                    EffectiveCapacity = validation.EffectiveCapacity,
-                    RecoveryCount = readResult.RecoveryCount,
-                    Retried = readResult.Retried
+                    EffectiveCapacity = validation.EffectiveCapacity
                 };
             }
 
-            S7ReadResult data = await ReadBytesResultAsync(
+            ReadOnlyMemory<byte> data = await ReadBytesAsync(
                 new S7ReadRequest(address.Area, address.DbNumber, address.StartByte, validation.BytesOccupied),
                 cancellationToken).ConfigureAwait(false);
 
             S7Value decoded = S7ValueCodec.Decode(
                 validation.DataType,
-                data.Data.Span,
+                data.Span,
                 validation.EffectiveCapacity);
             LogTyped(
                 "Read",
@@ -99,9 +97,7 @@ public sealed partial class S7Client
             return new S7TypedReadResult(decoded, validation.BytesOccupied, address)
             {
                 DataType = validation.DataType,
-                EffectiveCapacity = validation.EffectiveCapacity,
-                RecoveryCount = data.RecoveryCount,
-                Retried = data.Retried
+                EffectiveCapacity = validation.EffectiveCapacity
             };
         }
         catch (S7ClientException exception)
@@ -138,20 +134,6 @@ public sealed partial class S7Client
         S7TypedWriteRequest request,
         CancellationToken cancellationToken = default)
     {
-        S7WriteResult result = await WriteValueResultAsync(request, cancellationToken).ConfigureAwait(false);
-        return result.BytesWritten;
-    }
-
-    /// <summary>
-    /// 按地址表达式写入带类型的值并返回恢复元数据。其它语义与 <see cref="WriteValueAsync"/> 一致。
-    /// </summary>
-    /// <param name="request">类型化写入请求。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>写入结果及恢复元数据。</returns>
-    public async Task<S7WriteResult> WriteValueResultAsync(
-        S7TypedWriteRequest request,
-        CancellationToken cancellationToken = default)
-    {
         S7Address address = S7AddressParser.ParseSyntax(request.Address);
         long startTimestamp = Stopwatch.GetTimestamp();
         TypedValidationResult validation = default;
@@ -180,12 +162,12 @@ public sealed partial class S7Client
 
         try
         {
-            S7WriteResult result;
+            int written;
 
             if (validation.DataType == S7DataType.Bool)
             {
                 bool value = request.Value.AsBoolean();
-                result = await _session.WriteBitResultAsync(
+                written = await _session.WriteBitAsync(
                     new S7WriteRequest(address.Area, address.DbNumber, address.StartByte, ReadOnlyMemory<byte>.Empty),
                     address.BitNumber!.Value,
                     value,
@@ -197,7 +179,7 @@ public sealed partial class S7Client
                     validation.DataType,
                     request.Value,
                     validation.EffectiveCapacity);
-                result = await WriteBytesResultAsync(
+                written = await WriteBytesAsync(
                     new S7WriteRequest(address.Area, address.DbNumber, address.StartByte, encoded),
                     cancellationToken).ConfigureAwait(false);
             }
@@ -212,7 +194,7 @@ public sealed partial class S7Client
                 startTimestamp,
                 capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
 
-            return result;
+            return written;
         }
         catch (S7ClientException exception)
         {

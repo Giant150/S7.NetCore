@@ -258,10 +258,12 @@ public sealed class ClientIntegrationTests
     }
 
     [Fact]
-    public async Task Read_ConnectionClosed_ThrowsAndMarksFaulted()
+    public async Task Read_ConnectionClosed_WhenReconnectDisabled_MarksFaulted()
     {
         var transport = new FakeTcpTransport();
-        await using S7Client client = CreateClient(transport);
+        await using S7Client client = new(
+            CreateOptions() with { AutoReconnectEnabled = false },
+            transport: transport);
         await client.ConnectAsync();
 
         await transport.DisposeAsync();
@@ -315,10 +317,11 @@ public sealed class ClientIntegrationTests
     }
 
     [Fact]
-    public async Task Write_Timeout_MarksFaultedAndReportsUncertain()
+    public async Task Write_Timeout_KeepsConnectedAndReportsUncertain()
     {
         var options = CreateOptions() with { WriteTimeout = TimeSpan.FromSeconds(1) };
         var transport = new FakeTcpTransport();
+        FillMemory(transport.Memory, 64);
         await using S7Client client = new(options, transport: transport);
         await client.ConnectAsync();
 
@@ -332,11 +335,11 @@ public sealed class ClientIntegrationTests
         Assert.Equal(S7ErrorCategory.Timeout, exception.Category);
         Assert.Equal(S7ErrorCode.WriteTimeout, exception.ErrorCode);
         Assert.True(exception.WriteOutcomeUncertain);
-        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.Equal(S7SessionState.Connected, client.State);
 
-        S7ClientException followUp = await Assert.ThrowsAsync<S7ClientException>(
-            () => client.ReadBytesAsync(new S7ReadRequest(S7Area.Memory, 0, 0, 1)));
-        Assert.Equal(S7ErrorCode.SessionFaulted, followUp.ErrorCode);
+        ReadOnlyMemory<byte> followUp = await client.ReadBytesAsync(
+            new S7ReadRequest(S7Area.Memory, 0, 0, 1));
+        Assert.Equal(1, followUp.Length);
 
         await client.DisconnectAsync();
         Assert.Equal(S7SessionState.Disconnected, client.State);

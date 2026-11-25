@@ -51,6 +51,6 @@ public sealed record S7ConnectionOptions
     /// <summary>是否输出帧级十六进制协议跟踪。默认关闭。</summary>
     public bool EnableProtocolTrace { get; init; }
 
-    /// <summary>断线自动重连策略；默认 <see cref="S7ReconnectPolicy.Disabled"/>，与既有行为等价。</summary>
-    public S7ReconnectPolicy Reconnect { get; init; } = S7ReconnectPolicy.Disabled;
+    /// <summary>是否启用断线自动重连；唯一重连配置项，默认启用，创建后不可变。</summary>
+    public bool AutoReconnectEnabled { get; init; } = true;
 }

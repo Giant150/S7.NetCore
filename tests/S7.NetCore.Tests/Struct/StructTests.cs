@@ -252,8 +252,6 @@ public sealed class StructTests
         S7StructReadResult<NumericStruct> result = await client.ReadStructAsync<NumericStruct>("DB2.DBB0");
 
         Assert.Equal(26, result.BytesOccupied);
-        Assert.Equal(0, result.RecoveryCount);
-        Assert.False(result.Retried);
         Assert.True(result.Value.Flag);
         Assert.Equal((short)-12, result.Value.S);
         Assert.Equal("DB2.DBB0", result.Address.Expression);
@@ -425,42 +423,6 @@ public sealed class StructTests
         }
     }
 
-    [Fact]
-    public async Task ReconnectRecovery_IsPropagatedToStructResult()
-    {
-        var fake = new FakeTcpTransport();
-        var value = new NumericStruct { Flag = true, B = 1, S = 2, US = 3, I = 4, UI = 5, F = 6.5f, D = 7.5 };
-        StructLayoutSnapshot snapshot = StructLayoutResolver.Resolve<NumericStruct>();
-        byte[] encoded = StructEncoder.Encode(value, snapshot);
-        encoded.CopyTo(fake.Memory, 0);
-
-        var policy = new S7ReconnectPolicy
-        {
-            AutoReconnectEnabled = true,
-            MaxAttempts = 3,
-            InitialDelay = TimeSpan.FromMilliseconds(100),
-            MaxDelay = TimeSpan.FromSeconds(1),
-            BackoffMultiplier = 1.0,
-            JitterFactor = 0,
-            WaitTimeout = TimeSpan.FromSeconds(5)
-        };
-
-        await using S7Client client = new S7Client(
-            CreateOptions(policy),
-            transport: fake,
-            transportFactory: () => fake);
-        await client.ConnectAsync();
-        fake.FailAfterRequestCount = 3;
-
-        S7StructReadResult<NumericStruct> result = await client.ReadStructAsync<NumericStruct>("DB2.DBB0");
-
-        Assert.Equal(1, result.RecoveryCount);
-        Assert.True(result.Retried);
-        Assert.Equal(2, fake.ConnectedCount);
-        Assert.True(result.Value.Flag);
-        Assert.Equal(1, result.Value.B);
-    }
-
     private static void AssertLayoutError<T>(S7ErrorCode expectedCode)
         where T : struct
     {
@@ -479,9 +441,7 @@ public sealed class StructTests
         Assert.Equal(S7OperationStage.Validate, exception.Stage);
     }
 
-    private static S7ConnectionOptions CreateOptions(
-        S7ReconnectPolicy? policy = null,
-        int requestedPduSize = 480)
+    private static S7ConnectionOptions CreateOptions(int requestedPduSize = 480)
     {
         return new S7ConnectionOptions
         {
@@ -492,8 +452,7 @@ public sealed class StructTests
             ConnectTimeout = TimeSpan.FromSeconds(2),
             ReadTimeout = TimeSpan.FromSeconds(2),
             WriteTimeout = TimeSpan.FromSeconds(2),
-            RequestedPduSize = requestedPduSize,
-            Reconnect = policy ?? S7ReconnectPolicy.Disabled
+            RequestedPduSize = requestedPduSize
         };
     }
 

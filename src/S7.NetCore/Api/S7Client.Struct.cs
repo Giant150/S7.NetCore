@@ -15,10 +15,10 @@ public sealed partial class S7Client
     /// <typeparam name="T">结构体类型；支持 bool、byte、short、ushort、int、uint、float、double 与带容量标注的 string 字段。</typeparam>
     /// <param name="address">仅支持 <c>DBn.DBBm</c> 字节地址。</param>
     /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>解码后的结构体、总占用长度、解析地址与重连恢复元数据。</returns>
+    /// <returns>解码后的结构体、总占用长度与解析地址。</returns>
     /// <exception cref="S7ClientException">
     /// 布局非法（132/136/139）、地址非法（130/140/137）、PLC 返回错误、解码失败（404/406/407/408/409）、
-    /// 超时、取消或重连等待失败（204/604/605）。
+    /// 超时、取消或会话重连中（204）。
     /// </exception>
     public async Task<S7StructReadResult<T>> ReadStructAsync<T>(
         string address,
@@ -53,11 +53,11 @@ public sealed partial class S7Client
 
         try
         {
-            S7ReadResult readResult = await ReadBytesResultAsync(
+            ReadOnlyMemory<byte> data = await ReadBytesAsync(
                     new S7ReadRequest(parsed.Area, parsed.DbNumber, parsed.StartByte, snapshot.TotalLength),
                     cancellationToken)
                 .ConfigureAwait(false);
-            T value = StructDecoder.Decode<T>(readResult.Data.Span, snapshot);
+            T value = StructDecoder.Decode<T>(data.Span, snapshot);
 
             LogStruct(
                 "ReadStruct",
@@ -73,9 +73,7 @@ public sealed partial class S7Client
             return new S7StructReadResult<T>(
                 value,
                 snapshot.TotalLength,
-                parsed,
-                readResult.RecoveryCount,
-                readResult.Retried);
+                parsed);
         }
         catch (S7ClientException exception)
         {
@@ -105,27 +103,9 @@ public sealed partial class S7Client
     /// <returns>实际写入的字节数，恒等于结构体总占用长度。</returns>
     /// <exception cref="S7ClientException">
     /// 布局非法（132/136/139）、地址非法（130/140/137）、字段值非法（134/135/136/138）、
-    /// PLC 返回错误、超时、取消或重连相关失败（204/604/605）。
+    /// PLC 返回错误、超时、取消或会话重连中（204）。
     /// </exception>
     public async Task<int> WriteStructAsync<T>(
-        string address,
-        T value,
-        CancellationToken cancellationToken = default)
-        where T : struct
-    {
-        S7WriteResult result = await WriteStructResultAsync(address, value, cancellationToken).ConfigureAwait(false);
-        return result.BytesWritten;
-    }
-
-    /// <summary>
-    /// 把扁平结构体整段写入 DB 字节地址，并返回恢复元数据。其它语义与 <see cref="WriteStructAsync{T}"/> 一致。
-    /// </summary>
-    /// <typeparam name="T">结构体类型；支持 bool、byte、short、ushort、int、uint、float、double 与带容量标注的 string 字段。</typeparam>
-    /// <param name="address">仅支持 <c>DBn.DBBm</c> 字节地址。</param>
-    /// <param name="value">待写入的结构体值。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>写入结果及重连恢复/重放元数据。</returns>
-    public async Task<S7WriteResult> WriteStructResultAsync<T>(
         string address,
         T value,
         CancellationToken cancellationToken = default)
@@ -181,7 +161,7 @@ public sealed partial class S7Client
 
         try
         {
-            S7WriteResult writeResult = await WriteBytesResultAsync(
+            int written = await WriteBytesAsync(
                     new S7WriteRequest(parsed.Area, parsed.DbNumber, parsed.StartByte, encoded),
                     cancellationToken)
                 .ConfigureAwait(false);
@@ -197,7 +177,7 @@ public sealed partial class S7Client
                 startTimestamp: startTimestamp,
                 parsed: parsed);
 
-            return writeResult;
+            return written;
         }
         catch (S7ClientException exception)
         {

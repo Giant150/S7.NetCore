@@ -8,7 +8,6 @@ namespace S7.NetCore.Internal;
 internal sealed partial class S7Session : IAsyncDisposable
 {
     private readonly S7ConnectionOptions _options;
-    private readonly S7ReconnectPolicy _reconnect;
     private readonly IS7Logger _logger;
     private readonly ITcpTransport? _injectedTransport;
     private readonly Func<ITcpTransport>? _transportFactory;
@@ -22,21 +21,8 @@ internal sealed partial class S7Session : IAsyncDisposable
     private int _negotiatedPdu;
     private Guid _sessionId = Guid.Empty;
     private volatile ITcpTransport? _transport;
-    private int _reconnectAttempt;
-    private DateTimeOffset? _lastReconnectAt;
-    private TimeSpan? _nextReconnectDelay;
-    private S7ErrorCode? _firstFaultErrorCode;
     private CancellationTokenSource? _reconnectCancellation;
     private Task? _reconnectTask;
-    private TaskCompletionSource<ReconnectOutcome>? _reconnectSignal;
-    private S7ReconnectAbortReason _reconnectAbortReason = S7ReconnectAbortReason.DisconnectedByCaller;
-
-    private enum ReconnectOutcome
-    {
-        Reconnected,
-        Exhausted,
-        Aborted
-    }
 
     internal S7Session(
         S7ConnectionOptions options,
@@ -46,7 +32,6 @@ internal sealed partial class S7Session : IAsyncDisposable
         Func<ITcpTransport>? transportFactory = null)
     {
         _options = options;
-        _reconnect = options.Reconnect;
         _logger = logger is null or NullS7Logger ? NullS7Logger.Instance : new SafeS7Logger(logger);
         _injectedTransport = transport;
         _transportFactory = transportFactory;
@@ -55,8 +40,6 @@ internal sealed partial class S7Session : IAsyncDisposable
     }
 
     internal event EventHandler<S7SessionStateChangedEventArgs>? StateChanged;
-
-    internal event EventHandler<S7ReconnectEventArgs>? ReconnectEventRaised;
 
     internal S7SessionState State => (S7SessionState)Volatile.Read(ref _state);
 
@@ -89,12 +72,8 @@ internal sealed partial class S7Session : IAsyncDisposable
         if (!TryTransition(
                 S7SessionState.Disconnected,
                 S7SessionState.Connecting,
-                0,
-                null,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _))
         {
             bool faulted = State == S7SessionState.Faulted;
@@ -117,12 +96,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             if (!TryTransition(
                     S7SessionState.Connecting,
                     S7SessionState.Connected,
-                    0,
-                    null,
                     Guid.NewGuid(),
                     negotiation.Effective,
-                    null,
-                    null,
                     out _))
             {
                 _transport = null;
@@ -152,7 +127,7 @@ internal sealed partial class S7Session : IAsyncDisposable
 
         if (State == S7SessionState.Reconnecting)
         {
-            await AbortReconnectAsync(S7ReconnectAbortReason.DisconnectedByCaller).ConfigureAwait(false);
+            await AbortReconnectAsync().ConfigureAwait(false);
 
             ITcpTransport? reconnectingTransport = _transport;
             _transport = null;
@@ -188,12 +163,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             TryTransition(
                 previous,
                 S7SessionState.Disconnected,
-                0,
-                null,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _);
 
             if (transport is not null)
@@ -208,43 +179,22 @@ internal sealed partial class S7Session : IAsyncDisposable
         }
     }
 
-    internal async Task<ReadOnlyMemory<byte>> ReadAsync(S7ReadRequest request, CancellationToken cancellationToken)
+    internal Task<ReadOnlyMemory<byte>> ReadAsync(S7ReadRequest request, CancellationToken cancellationToken)
     {
-        S7ReadResult result = await ReadResultAsync(request, cancellationToken).ConfigureAwait(false);
-        return result.Data;
-    }
-
-    internal async Task<S7ReadResult> ReadResultAsync(S7ReadRequest request, CancellationToken cancellationToken)
-    {
-        int recovery = 0;
-        while (true)
-        {
-            try
-            {
-                ReadOnlyMemory<byte> data = await ReadOnceAsync(request, recovery == 0, cancellationToken)
-                    .ConfigureAwait(false);
-                return new S7ReadResult(data, recovery, recovery > 0);
-            }
-            catch (S7ClientException exception) when (recovery == 0 && ShouldRecover(exception))
-            {
-                await WaitForRecoveryAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
-                recovery = 1;
-            }
-        }
+        return ReadOnceAsync(request, cancellationToken);
     }
 
     private async Task<ReadOnlyMemory<byte>> ReadOnceAsync(
         S7ReadRequest request,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        await EnsureConnectedAsync(S7OperationStage.Read, allowWait, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
         using RequestGate.Lease lease = await AcquireGateAsync(
                 S7OperationStage.Read,
                 DescribeReadChunk(request, request.StartByte, request.Length),
                 cancellationToken)
             .ConfigureAwait(false);
-        await EnsureConnectedAsync(S7OperationStage.Read, allowWait: false, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
 
         int payloadLimit = NegotiatedPduSize - ProtocolConstants.ReadResponseOverhead;
         int totalLength = request.Length;
@@ -307,24 +257,7 @@ internal sealed partial class S7Session : IAsyncDisposable
                     bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Read)
                         .ConfigureAwait(false);
 
-                    if (timeout.CallerTriggered)
-                    {
-                        if (!drained)
-                        {
-                            await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-                        }
-                    }
-                    else if (_reconnect.ReconnectOnTimeout)
-                    {
-                        await HandleFaultAsync(
-                                transport,
-                                S7OperationStage.Read,
-                                S7ErrorCode.ReadTimeout,
-                                S7ErrorCategory.Timeout,
-                                callerCancelled: false)
-                            .ConfigureAwait(false);
-                    }
-                    else if (!drained)
+                    if (timeout.CallerTriggered && !drained)
                     {
                         await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
                     }
@@ -408,62 +341,28 @@ internal sealed partial class S7Session : IAsyncDisposable
         }
     }
 
-    internal async Task<int> WriteBitAsync(
+    internal Task<int> WriteBitAsync(
         S7WriteRequest request,
         int bitNumber,
         bool value,
         CancellationToken cancellationToken)
     {
-        S7WriteResult result = await WriteBitResultAsync(request, bitNumber, value, cancellationToken)
-            .ConfigureAwait(false);
-        return result.BytesWritten;
-    }
-
-    internal async Task<S7WriteResult> WriteBitResultAsync(
-        S7WriteRequest request,
-        int bitNumber,
-        bool value,
-        CancellationToken cancellationToken)
-    {
-        int recovery = 0;
-        bool replayAttempted = false;
-
-        while (true)
-        {
-            try
-            {
-                int written = await WriteBitOnceAsync(request, bitNumber, value, recovery == 0, cancellationToken)
-                    .ConfigureAwait(false);
-                return new S7WriteResult(written, recovery, recovery > 0, replayAttempted, replayAttempted ? 1 : 0);
-            }
-            catch (S7ClientException exception) when (recovery == 0 && ShouldRecover(exception))
-            {
-                if (exception.WriteOutcomeUncertain && !_reconnect.ReplayUncertainWrites)
-                {
-                    throw;
-                }
-
-                replayAttempted = exception.WriteOutcomeUncertain;
-                await WaitForRecoveryAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
-                recovery = 1;
-            }
-        }
+        return WriteBitOnceAsync(request, bitNumber, value, cancellationToken);
     }
 
     private async Task<int> WriteBitOnceAsync(
         S7WriteRequest request,
         int bitNumber,
         bool value,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
         using RequestGate.Lease lease = await AcquireGateAsync(
                 S7OperationStage.Write,
                 DescribeWriteChunk(request, request.StartByte, 1),
                 cancellationToken)
             .ConfigureAwait(false);
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait: false, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
 
         var scope = new OperationScope();
         ITcpTransport transport = _transport!;
@@ -525,21 +424,7 @@ internal sealed partial class S7Session : IAsyncDisposable
         catch (OperationCanceledException ex)
         {
             bool uncertain = writeIssued;
-            if (!timeout.CallerTriggered && _reconnect.ReconnectOnTimeout)
-            {
-                await HandleFaultAsync(
-                        transport,
-                        S7OperationStage.Write,
-                        S7ErrorCode.WriteTimeout,
-                        S7ErrorCategory.Timeout,
-                        callerCancelled: false)
-                    .ConfigureAwait(false);
-            }
-            else if (!timeout.CallerTriggered)
-            {
-                await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-            }
-            else
+            if (timeout.CallerTriggered)
             {
                 bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Write).ConfigureAwait(false);
                 if (!drained)
@@ -613,67 +498,28 @@ internal sealed partial class S7Session : IAsyncDisposable
         }
     }
 
-    internal async Task<int> WriteAsync(S7WriteRequest request, CancellationToken cancellationToken)
+    internal Task<int> WriteAsync(S7WriteRequest request, CancellationToken cancellationToken)
     {
-        S7WriteResult result = await WriteResultAsync(request, cancellationToken).ConfigureAwait(false);
-        return result.BytesWritten;
-    }
-
-    internal async Task<S7WriteResult> WriteResultAsync(S7WriteRequest request, CancellationToken cancellationToken)
-    {
-        int recovery = 0;
-        int acknowledged = 0;
-        bool replayAttempted = false;
-        int replayStart = 0;
-
-        while (true)
-        {
-            try
-            {
-                int written = await WriteOnceAsync(request, acknowledged, recovery == 0, cancellationToken)
-                    .ConfigureAwait(false);
-                return new S7WriteResult(
-                    written,
-                    recovery,
-                    recovery > 0,
-                    replayAttempted,
-                    replayAttempted ? written - replayStart : 0);
-            }
-            catch (S7ClientException exception) when (recovery == 0 && ShouldRecover(exception))
-            {
-                if (exception.WriteOutcomeUncertain && !_reconnect.ReplayUncertainWrites)
-                {
-                    throw;
-                }
-
-                replayAttempted = exception.WriteOutcomeUncertain;
-                replayStart = exception.BytesWritten;
-                acknowledged = exception.BytesWritten;
-                await WaitForRecoveryAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
-                recovery = 1;
-            }
-        }
+        return WriteOnceAsync(request, cancellationToken);
     }
 
     private async Task<int> WriteOnceAsync(
         S7WriteRequest request,
-        int startOffset,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
         using RequestGate.Lease lease = await AcquireGateAsync(
                 S7OperationStage.Write,
                 DescribeWriteChunk(request, request.StartByte, request.Data.Length),
                 cancellationToken)
             .ConfigureAwait(false);
-        await EnsureConnectedAsync(S7OperationStage.Write, allowWait: false, cancellationToken).ConfigureAwait(false);
+        await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
 
         int payloadLimit = NegotiatedPduSize - ProtocolConstants.WriteRequestOverhead;
         int totalLength = request.Data.Length;
         int chunkCount = (totalLength + payloadLimit - 1) / payloadLimit;
-        int offset = startOffset;
-        int chunkIndex = startOffset / payloadLimit;
+        int offset = 0;
+        int chunkIndex = 0;
         var scope = new OperationScope();
         ITcpTransport transport = _transport!;
 
@@ -740,21 +586,7 @@ internal sealed partial class S7Session : IAsyncDisposable
                     ? new WrittenRange(request.StartByte, offset)
                     : null;
 
-                if (!timeout.CallerTriggered && _reconnect.ReconnectOnTimeout)
-                {
-                    await HandleFaultAsync(
-                            transport,
-                            S7OperationStage.Write,
-                            S7ErrorCode.WriteTimeout,
-                            S7ErrorCategory.Timeout,
-                            callerCancelled: false)
-                        .ConfigureAwait(false);
-                }
-                else if (!timeout.CallerTriggered)
-                {
-                    await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-                }
-                else
+                if (timeout.CallerTriggered)
                 {
                     bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Write)
                         .ConfigureAwait(false);
@@ -857,131 +689,55 @@ internal sealed partial class S7Session : IAsyncDisposable
 
         if (State == S7SessionState.Reconnecting)
         {
-            await AbortReconnectAsync(S7ReconnectAbortReason.ClientDisposed).ConfigureAwait(false);
+            await AbortReconnectAsync().ConfigureAwait(false);
         }
 
         await DisconnectAsync(CancellationToken.None).ConfigureAwait(false);
         _gate.Dispose();
     }
 
-    private async Task EnsureConnectedAsync(
+    private Task EnsureConnectedAsync(
         S7OperationStage stage,
-        bool allowWait,
         CancellationToken cancellationToken)
     {
-        bool waited = false;
-
-        while (true)
+        S7SessionState state = State;
+        if (state == S7SessionState.Connected)
         {
-            S7SessionState state = State;
-            if (state == S7SessionState.Connected)
-            {
-                return;
-            }
+            return Task.CompletedTask;
+        }
 
-            if (state == S7SessionState.Reconnecting)
-            {
-                if (!allowWait || waited || _reconnect.WaitTimeout <= TimeSpan.Zero)
-                {
-                    throw new S7ClientException(
-                        S7ErrorCategory.InvalidArgument,
-                        S7ErrorCode.SessionReconnecting,
-                        stage,
-                        "会话正在自动重连，请求等待窗口为零或已用尽。");
-                }
-
-                TaskCompletionSource<ReconnectOutcome>? signal;
-                lock (_sync)
-                {
-                    signal = _reconnectSignal;
-                }
-
-                if (signal is null)
-                {
-                    throw new S7ClientException(
-                        S7ErrorCategory.InvalidArgument,
-                        S7ErrorCode.SessionReconnecting,
-                        stage,
-                        "会话正在自动重连，未取得重连终态信号。");
-                }
-
-                using var timeout = new OperationTimeout(_reconnect.WaitTimeout, cancellationToken, _timeProvider);
-                ReconnectOutcome outcome;
-                try
-                {
-                    outcome = await signal.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
-                }
-                catch (OperationCanceledException ex)
-                {
-                    if (timeout.CallerTriggered)
-                    {
-                        throw new S7ClientException(
-                            S7ErrorCategory.Cancelled,
-                            S7ErrorCode.OperationCancelled,
-                            stage,
-                            "等待自动重连期间操作已取消。",
-                            innerException: ex);
-                    }
-
-                    throw new S7ClientException(
-                        S7ErrorCategory.InvalidArgument,
-                        S7ErrorCode.SessionReconnecting,
-                        stage,
-                        $"等待自动重连超时（窗口 {_reconnect.WaitTimeout.TotalSeconds} 秒）。",
-                        innerException: ex);
-                }
-
-                waited = true;
-                switch (outcome)
-                {
-                    case ReconnectOutcome.Reconnected:
-                        continue;
-                    case ReconnectOutcome.Exhausted:
-                        throw new S7ClientException(
-                            S7ErrorCategory.InvalidArgument,
-                            S7ErrorCode.ReconnectExhausted,
-                            S7OperationStage.Reconnect,
-                            "自动重连尝试次数已耗尽，会话已断开。");
-                    default:
-                        throw new S7ClientException(
-                            S7ErrorCategory.InvalidArgument,
-                            S7ErrorCode.ReconnectAborted,
-                            S7OperationStage.Reconnect,
-                            "自动重连已被中止。");
-                }
-            }
-
-            if (state == S7SessionState.Faulted)
+        if (state == S7SessionState.Reconnecting)
+        {
+            if (cancellationToken.IsCancellationRequested)
             {
                 throw new S7ClientException(
-                    S7ErrorCategory.InvalidArgument,
-                    S7ErrorCode.SessionFaulted,
+                    S7ErrorCategory.Cancelled,
+                    S7ErrorCode.OperationCancelled,
                     stage,
-                    "会话处于异常状态，必须显式断开后重连。");
+                    "操作已取消：会话正在自动重连。");
             }
 
             throw new S7ClientException(
                 S7ErrorCategory.InvalidArgument,
-                S7ErrorCode.SessionNotEstablished,
+                S7ErrorCode.SessionReconnecting,
                 stage,
-                "会话未建立，禁止执行读写请求。");
+                "会话正在自动重连，请求无法执行。");
         }
-    }
 
-    private async Task WaitForRecoveryAsync(S7OperationStage stage, CancellationToken cancellationToken)
-    {
-        await EnsureConnectedAsync(stage, allowWait: true, cancellationToken).ConfigureAwait(false);
-    }
-
-    private bool ShouldRecover(S7ClientException exception)
-    {
-        if (!_reconnect.AutoReconnectEnabled || State != S7SessionState.Reconnecting)
+        if (state == S7SessionState.Faulted)
         {
-            return false;
+            throw new S7ClientException(
+                S7ErrorCategory.InvalidArgument,
+                S7ErrorCode.SessionFaulted,
+                stage,
+                "会话处于异常状态，必须显式断开后重连。");
         }
 
-        return exception.Category == S7ErrorCategory.Connection
-            || (exception.Category == S7ErrorCategory.Timeout && _reconnect.ReconnectOnTimeout);
+        throw new S7ClientException(
+            S7ErrorCategory.InvalidArgument,
+            S7ErrorCode.SessionNotEstablished,
+            stage,
+            "会话未建立，禁止执行读写请求。");
     }
 
     private async Task<PduNegotiation> HandshakeAsync(ITcpTransport transport, CancellationToken cancellationToken)
@@ -1061,40 +817,30 @@ internal sealed partial class S7Session : IAsyncDisposable
         return _injectedTransport ?? new TcpTransport();
     }
 
-    private bool StartReconnect(S7ErrorCode firstFault)
+    private bool StartReconnect()
     {
         if (!TryTransition(
                 S7SessionState.Connected,
                 S7SessionState.Reconnecting,
-                0,
-                firstFault,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _))
         {
             return false;
         }
 
         var cancellation = new CancellationTokenSource();
-        var signal = new TaskCompletionSource<ReconnectOutcome>(TaskCreationOptions.RunContinuationsAsynchronously);
-        Task task = Task.Run(() => RunReconnectLoopAsync(firstFault, cancellation.Token));
+        Task task = Task.Run(() => RunReconnectLoopAsync(cancellation.Token));
         lock (_sync)
         {
             _reconnectCancellation = cancellation;
-            _reconnectSignal = signal;
             _reconnectTask = task;
-            _reconnectAttempt = 0;
-            _nextReconnectDelay = null;
-            _firstFaultErrorCode = firstFault;
-            _reconnectAbortReason = S7ReconnectAbortReason.DisconnectedByCaller;
         }
 
         return true;
     }
 
-    private async Task RunReconnectLoopAsync(S7ErrorCode firstFault, CancellationToken cancellationToken)
+    private async Task RunReconnectLoopAsync(CancellationToken cancellationToken)
     {
         DateTimeOffset disconnectedAt = _timeProvider.GetUtcNow();
         int attempt = 0;
@@ -1103,17 +849,12 @@ internal sealed partial class S7Session : IAsyncDisposable
         {
             if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
             {
-                FinishAborted(_reconnectAbortReason);
+                FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                 return;
             }
 
             attempt++;
-            TimeSpan delay = BackoffDelayCalculator.Calculate(attempt, _reconnect);
-            lock (_sync)
-            {
-                _reconnectAttempt = attempt;
-                _nextReconnectDelay = delay;
-            }
+            TimeSpan delay = BackoffDelayCalculator.Calculate(attempt);
 
             if (delay > TimeSpan.Zero)
             {
@@ -1123,26 +864,17 @@ internal sealed partial class S7Session : IAsyncDisposable
                 }
                 catch (OperationCanceledException)
                 {
-                    FinishAborted(_reconnectAbortReason);
+                    FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                     return;
                 }
             }
 
             if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
             {
-                FinishAborted(_reconnectAbortReason);
+                FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                 return;
             }
 
-            DateTimeOffset attemptStartedAt = _timeProvider.GetUtcNow();
-            RaiseReconnectEvent(new S7ReconnectEventArgs
-            {
-                Kind = S7ReconnectEventKind.AttemptStarted,
-                Attempt = attempt,
-                MaxAttempts = _reconnect.MaxAttempts,
-                Delay = delay,
-                Elapsed = attemptStartedAt - disconnectedAt
-            });
             LogReconnect(
                 S7LogLevel.Information,
                 succeeded: true,
@@ -1154,18 +886,12 @@ internal sealed partial class S7Session : IAsyncDisposable
             try
             {
                 transport = CreateTransport();
-                PduNegotiation negotiation;
-                using (RequestGate.Lease lease = await _gate
-                           .AcquireAsync(S7OperationStage.Reconnect, cancellationToken)
-                           .ConfigureAwait(false))
-                {
-                    negotiation = await HandshakeAsync(transport, cancellationToken).ConfigureAwait(false);
-                }
+                PduNegotiation negotiation = await HandshakeAsync(transport, cancellationToken).ConfigureAwait(false);
 
                 if (cancellationToken.IsCancellationRequested || Volatile.Read(ref _disposed) != 0)
                 {
                     await transport.DisposeAsync().ConfigureAwait(false);
-                    FinishAborted(_reconnectAbortReason);
+                    FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                     return;
                 }
 
@@ -1175,12 +901,8 @@ internal sealed partial class S7Session : IAsyncDisposable
                 if (!TryTransition(
                         S7SessionState.Reconnecting,
                         S7SessionState.Connected,
-                        0,
-                        null,
                         newSessionId,
                         negotiation.Effective,
-                        connectedAt,
-                        null,
                         out _))
                 {
                     _transport = null;
@@ -1188,24 +910,6 @@ internal sealed partial class S7Session : IAsyncDisposable
                     return;
                 }
 
-                lock (_sync)
-                {
-                    _reconnectAttempt = 0;
-                    _nextReconnectDelay = null;
-                    _firstFaultErrorCode = null;
-                }
-
-                RaiseReconnectEvent(new S7ReconnectEventArgs
-                {
-                    Kind = S7ReconnectEventKind.Reconnected,
-                    Attempt = attempt,
-                    MaxAttempts = _reconnect.MaxAttempts,
-                    Delay = delay,
-                    Elapsed = connectedAt - disconnectedAt,
-                    DisconnectedDuration = connectedAt - disconnectedAt,
-                    NewSessionId = newSessionId,
-                    NegotiatedPduSize = negotiation.Effective
-                });
                 LogReconnect(
                     S7LogLevel.Information,
                     succeeded: true,
@@ -1213,7 +917,6 @@ internal sealed partial class S7Session : IAsyncDisposable
                     delay,
                     connectedAt - disconnectedAt,
                     negotiatedPduSize: negotiation.Effective);
-                _reconnectSignal?.TrySetResult(ReconnectOutcome.Reconnected);
                 return;
             }
             catch (OperationCanceledException)
@@ -1223,7 +926,7 @@ internal sealed partial class S7Session : IAsyncDisposable
                     await transport.DisposeAsync().ConfigureAwait(false);
                 }
 
-                FinishAborted(_reconnectAbortReason);
+                FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                 return;
             }
             catch (S7ClientException exception)
@@ -1233,17 +936,6 @@ internal sealed partial class S7Session : IAsyncDisposable
                     await transport.DisposeAsync().ConfigureAwait(false);
                 }
 
-                DateTimeOffset failedAt = _timeProvider.GetUtcNow();
-                RaiseReconnectEvent(new S7ReconnectEventArgs
-                {
-                    Kind = S7ReconnectEventKind.AttemptFailed,
-                    Attempt = attempt,
-                    MaxAttempts = _reconnect.MaxAttempts,
-                    Delay = delay,
-                    Elapsed = failedAt - disconnectedAt,
-                    ErrorCategory = exception.Category,
-                    ErrorCode = exception.ErrorCode
-                });
                 LogReconnect(
                     S7LogLevel.Warning,
                     succeeded: false,
@@ -1262,21 +954,10 @@ internal sealed partial class S7Session : IAsyncDisposable
 
                 if (Volatile.Read(ref _disposed) != 0)
                 {
-                    FinishAborted(S7ReconnectAbortReason.ClientDisposed);
+                    FinishAborted(_timeProvider.GetUtcNow() - disconnectedAt);
                     return;
                 }
 
-                DateTimeOffset failedAt = _timeProvider.GetUtcNow();
-                RaiseReconnectEvent(new S7ReconnectEventArgs
-                {
-                    Kind = S7ReconnectEventKind.AttemptFailed,
-                    Attempt = attempt,
-                    MaxAttempts = _reconnect.MaxAttempts,
-                    Delay = delay,
-                    Elapsed = failedAt - disconnectedAt,
-                    ErrorCategory = S7ErrorCategory.Connection,
-                    ErrorCode = S7ErrorCode.ConnectionReset
-                });
                 LogReconnect(
                     S7LogLevel.Warning,
                     succeeded: false,
@@ -1286,98 +967,35 @@ internal sealed partial class S7Session : IAsyncDisposable
                     errorCode: S7ErrorCode.ConnectionReset,
                     exception: exception);
             }
-
-            if (_reconnect.MaxAttempts > 0 && attempt >= _reconnect.MaxAttempts)
-            {
-                FinishExhausted(firstFault, attempt, delay, disconnectedAt);
-                return;
-            }
         }
     }
 
-    private void FinishExhausted(
-        S7ErrorCode firstFault,
-        int attempt,
-        TimeSpan delay,
-        DateTimeOffset disconnectedAt)
+    private void FinishAborted(TimeSpan? disconnectedDuration = null)
     {
-        DateTimeOffset now = _timeProvider.GetUtcNow();
         if (!TryTransition(
                 S7SessionState.Reconnecting,
                 S7SessionState.Disconnected,
-                0,
-                firstFault,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _))
         {
             return;
         }
 
-        RaiseReconnectEvent(new S7ReconnectEventArgs
-        {
-            Kind = S7ReconnectEventKind.Exhausted,
-            Attempt = attempt,
-            MaxAttempts = _reconnect.MaxAttempts,
-            Delay = delay,
-            Elapsed = now - disconnectedAt,
-            ErrorCategory = S7ErrorCategory.Connection,
-            ErrorCode = firstFault,
-            DisconnectedDuration = now - disconnectedAt
-        });
         LogReconnect(
-            S7LogLevel.Error,
+            S7LogLevel.Warning,
             succeeded: false,
-            attempt,
-            delay,
-            now - disconnectedAt,
-            errorCode: firstFault);
-        _reconnectSignal?.TrySetResult(ReconnectOutcome.Exhausted);
-    }
-
-    private void FinishAborted(S7ReconnectAbortReason reason)
-    {
-        if (!TryTransition(
-                S7SessionState.Reconnecting,
-                S7SessionState.Disconnected,
-                0,
-                _firstFaultErrorCode,
-                Guid.Empty,
-                0,
-                _lastReconnectAt,
-                null,
-                out _))
-        {
-            return;
-        }
-
-        RaiseReconnectEvent(new S7ReconnectEventArgs
-        {
-            Kind = S7ReconnectEventKind.Aborted,
-            Attempt = Math.Max(1, _reconnectAttempt),
-            MaxAttempts = _reconnect.MaxAttempts,
-            Delay = TimeSpan.Zero,
-            AbortReason = reason
-        });
-        LogReconnect(
-            S7LogLevel.Error,
-            succeeded: false,
-            _reconnectAttempt,
+            attempt: null,
             TimeSpan.Zero,
-            disconnectedDuration: null,
-            errorCode: S7ErrorCode.ReconnectAborted);
-        _reconnectSignal?.TrySetResult(ReconnectOutcome.Aborted);
+            disconnectedDuration);
     }
 
-    private async Task AbortReconnectAsync(S7ReconnectAbortReason reason)
+    private async Task AbortReconnectAsync()
     {
         CancellationTokenSource? cancellation;
         Task? task;
         lock (_sync)
         {
-            _reconnectAbortReason = reason;
             cancellation = _reconnectCancellation;
             task = _reconnectTask;
         }
@@ -1404,7 +1022,7 @@ internal sealed partial class S7Session : IAsyncDisposable
             }
         }
 
-        FinishAborted(reason);
+        FinishAborted();
         CleanupReconnectArtifacts();
     }
 
@@ -1416,9 +1034,6 @@ internal sealed partial class S7Session : IAsyncDisposable
             cancellation = _reconnectCancellation;
             _reconnectCancellation = null;
             _reconnectTask = null;
-            _reconnectSignal = null;
-            _reconnectAttempt = 0;
-            _nextReconnectDelay = null;
         }
 
         cancellation?.Dispose();
@@ -1435,8 +1050,12 @@ internal sealed partial class S7Session : IAsyncDisposable
         _transport = null;
         await transport.DisposeAsync().ConfigureAwait(false);
 
-        if (ReconnectFaultClassifier.ShouldReconnect(_reconnect, stateBefore, callerCancelled, category, stage)
-            && StartReconnect(errorCode))
+        if (ReconnectFaultClassifier.ShouldReconnect(
+                _options.AutoReconnectEnabled,
+                stateBefore,
+                callerCancelled,
+                category)
+            && StartReconnect())
         {
             return true;
         }
@@ -1446,12 +1065,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             TryTransition(
                 S7SessionState.Connected,
                 S7SessionState.Faulted,
-                0,
-                null,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _);
         }
 
@@ -1467,12 +1082,8 @@ internal sealed partial class S7Session : IAsyncDisposable
         TryTransition(
             S7SessionState.Connecting,
             S7SessionState.Disconnected,
-            0,
-            null,
             Guid.Empty,
             0,
-            _lastReconnectAt,
-            null,
             out _);
     }
 
@@ -1500,12 +1111,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             TryTransition(
                 S7SessionState.Connected,
                 S7SessionState.Faulted,
-                0,
-                null,
                 Guid.Empty,
                 0,
-                _lastReconnectAt,
-                null,
                 out _);
         }
     }
@@ -1513,12 +1120,8 @@ internal sealed partial class S7Session : IAsyncDisposable
     private bool TryTransition(
         S7SessionState expected,
         S7SessionState target,
-        int attempt,
-        S7ErrorCode? firstFault,
         Guid sessionId,
         int pdu,
-        DateTimeOffset? lastReconnectAt,
-        TimeSpan? nextDelay,
         out SessionSnapshot snapshot)
     {
         S7SessionState previous;
@@ -1532,12 +1135,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             }
 
             _state = (int)target;
-            _reconnectAttempt = attempt;
-            _firstFaultErrorCode = firstFault;
             _sessionId = sessionId;
             _negotiatedPdu = pdu;
-            _lastReconnectAt = lastReconnectAt;
-            _nextReconnectDelay = nextDelay;
             snapshot = CreateSnapshotLocked();
         }
 
@@ -1552,10 +1151,7 @@ internal sealed partial class S7Session : IAsyncDisposable
             State = (S7SessionState)_state,
             SessionId = _sessionId,
             NegotiatedPduSize = _negotiatedPdu,
-            AutoReconnectEnabled = _reconnect.AutoReconnectEnabled,
-            ReconnectAttempt = _reconnectAttempt,
-            LastReconnectAt = _lastReconnectAt,
-            NextReconnectDelay = _nextReconnectDelay
+            AutoReconnectEnabled = _options.AutoReconnectEnabled
         };
     }
 
@@ -1577,8 +1173,6 @@ internal sealed partial class S7Session : IAsyncDisposable
             PreviousState = previous,
             CurrentState = current,
             SessionId = snapshot.SessionId,
-            Attempt = current == S7SessionState.Reconnecting ? snapshot.ReconnectAttempt : null,
-            FirstFaultErrorCode = current == S7SessionState.Reconnecting ? _firstFaultErrorCode : null,
             Timestamp = _timeProvider.GetUtcNow()
         };
 
@@ -1587,31 +1181,6 @@ internal sealed partial class S7Session : IAsyncDisposable
             try
             {
                 ((EventHandler<S7SessionStateChangedEventArgs>)handler)(this, args);
-            }
-            catch
-            {
-            }
-        }
-    }
-
-    private void RaiseReconnectEvent(S7ReconnectEventArgs args)
-    {
-        if (Volatile.Read(ref _disposed) != 0)
-        {
-            return;
-        }
-
-        EventHandler<S7ReconnectEventArgs>? handlers = ReconnectEventRaised;
-        if (handlers is null)
-        {
-            return;
-        }
-
-        foreach (Delegate handler in handlers.GetInvocationList())
-        {
-            try
-            {
-                ((EventHandler<S7ReconnectEventArgs>)handler)(this, args);
             }
             catch
             {
@@ -1805,7 +1374,7 @@ internal sealed partial class S7Session : IAsyncDisposable
     private void LogReconnect(
         S7LogLevel level,
         bool succeeded,
-        int attempt,
+        int? attempt,
         TimeSpan delay,
         TimeSpan? disconnectedDuration,
         S7ErrorCode? errorCode = null,
@@ -1820,7 +1389,6 @@ internal sealed partial class S7Session : IAsyncDisposable
             errorCode: errorCode,
             negotiatedPduSize: negotiatedPduSize,
             attempt: attempt,
-            maxAttempts: _reconnect.MaxAttempts,
             reconnectDelay: delay,
             disconnectedDuration: disconnectedDuration,
             exception: exception,
@@ -1844,7 +1412,6 @@ internal sealed partial class S7Session : IAsyncDisposable
         string? protocolTrace = null,
         Exception? exception = null,
         int? attempt = null,
-        int? maxAttempts = null,
         TimeSpan? reconnectDelay = null,
         TimeSpan? disconnectedDuration = null,
         S7LogLevel? level = null)
@@ -1877,7 +1444,6 @@ internal sealed partial class S7Session : IAsyncDisposable
             NegotiatedPduSize = negotiatedPduSize,
             ProtocolTrace = protocolTrace,
             Attempt = attempt,
-            MaxAttempts = maxAttempts,
             ReconnectDelay = reconnectDelay,
             DisconnectedDuration = disconnectedDuration
         };

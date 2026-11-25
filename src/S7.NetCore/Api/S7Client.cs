@@ -10,10 +10,9 @@ public sealed partial class S7Client : IAsyncDisposable
     private readonly S7Session _session;
     private readonly IS7Logger _logger;
     private EventHandler<S7SessionStateChangedEventArgs>? _sessionStateChanged;
-    private EventHandler<S7ReconnectEventArgs>? _reconnectEvent;
 
     /// <summary>
-    /// 创建客户端并校验连接参数与重连策略。
+    /// 创建客户端并校验连接参数。
     /// </summary>
     /// <param name="options">连接参数。</param>
     /// <param name="logger">可选诊断日志设施；不注入时使用空实现。</param>
@@ -21,7 +20,7 @@ public sealed partial class S7Client : IAsyncDisposable
     /// <param name="transportFactory">可选传输工厂；启用自动重连时建议注入，每次重连将获取新实例。</param>
     /// <param name="timeProvider">可选时间源；不注入时使用系统时间。</param>
     /// <exception cref="ArgumentNullException"><paramref name="options"/> 为 <see langword="null"/>。</exception>
-    /// <exception cref="S7ClientException">连接参数或重连策略非法时抛出，类别为 <see cref="S7ErrorCategory.InvalidArgument"/>。</exception>
+    /// <exception cref="S7ClientException">连接参数非法时抛出，类别为 <see cref="S7ErrorCategory.InvalidArgument"/>。</exception>
     public S7Client(
         S7ConnectionOptions options,
         IS7Logger? logger = null,
@@ -34,7 +33,6 @@ public sealed partial class S7Client : IAsyncDisposable
         _logger = logger is null or NullS7Logger ? NullS7Logger.Instance : new SafeS7Logger(logger);
         _session = new S7Session(options, logger, transport, timeProvider, transportFactory);
         _session.StateChanged += OnSessionStateChanged;
-        _session.ReconnectEventRaised += OnReconnectEventRaised;
     }
 
     /// <summary>当前会话状态。</summary>
@@ -54,13 +52,6 @@ public sealed partial class S7Client : IAsyncDisposable
     {
         add => _sessionStateChanged += value;
         remove => _sessionStateChanged -= value;
-    }
-
-    /// <summary>重连生命周期通知；订阅方异常不会影响主流程。</summary>
-    public event EventHandler<S7ReconnectEventArgs>? ReconnectEvent
-    {
-        add => _reconnectEvent += value;
-        remove => _reconnectEvent -= value;
     }
 
     /// <summary>
@@ -106,25 +97,11 @@ public sealed partial class S7Client : IAsyncDisposable
         return ReadBytesCoreAsync(request, cancellationToken);
     }
 
-    private async Task<ReadOnlyMemory<byte>> ReadBytesCoreAsync(
+    private Task<ReadOnlyMemory<byte>> ReadBytesCoreAsync(
         S7ReadRequest request,
         CancellationToken cancellationToken)
     {
-        return (await _session.ReadResultAsync(request, cancellationToken).ConfigureAwait(false)).Data;
-    }
-
-    /// <summary>
-    /// 读取原始字节并返回恢复元数据。其它语义与 <see cref="ReadBytesAsync"/> 一致。
-    /// </summary>
-    /// <param name="request">读取请求。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>读取结果及恢复元数据。</returns>
-    public Task<S7ReadResult> ReadBytesResultAsync(
-        S7ReadRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        RequestValidator.ValidateRead(in request);
-        return _session.ReadResultAsync(request, cancellationToken);
+        return _session.ReadAsync(request, cancellationToken);
     }
 
     /// <summary>
@@ -147,25 +124,11 @@ public sealed partial class S7Client : IAsyncDisposable
         return WriteBytesCoreAsync(request, cancellationToken);
     }
 
-    private async Task<int> WriteBytesCoreAsync(
+    private Task<int> WriteBytesCoreAsync(
         S7WriteRequest request,
         CancellationToken cancellationToken)
     {
-        return (await _session.WriteResultAsync(request, cancellationToken).ConfigureAwait(false)).BytesWritten;
-    }
-
-    /// <summary>
-    /// 写入原始字节并返回恢复元数据。其它语义与 <see cref="WriteBytesAsync"/> 一致。
-    /// </summary>
-    /// <param name="request">写入请求。</param>
-    /// <param name="cancellationToken">取消令牌。</param>
-    /// <returns>写入结果及恢复元数据。</returns>
-    public Task<S7WriteResult> WriteBytesResultAsync(
-        S7WriteRequest request,
-        CancellationToken cancellationToken = default)
-    {
-        RequestValidator.ValidateWrite(in request);
-        return _session.WriteResultAsync(request, cancellationToken);
+        return _session.WriteAsync(request, cancellationToken);
     }
 
     /// <summary>
@@ -198,27 +161,6 @@ public sealed partial class S7Client : IAsyncDisposable
         }
     }
 
-    private void OnReconnectEventRaised(object? sender, S7ReconnectEventArgs e)
-    {
-        EventHandler<S7ReconnectEventArgs>? handlers = _reconnectEvent;
-        if (handlers is null)
-        {
-            return;
-        }
-
-        foreach (Delegate handler in handlers.GetInvocationList())
-        {
-            try
-            {
-                ((EventHandler<S7ReconnectEventArgs>)handler)(this, e);
-            }
-            catch (Exception exception)
-            {
-                LogNotificationFailure(exception);
-            }
-        }
-    }
-
     private void LogNotificationFailure(Exception exception)
     {
         if (!_logger.IsEnabled(S7LogLevel.Warning))
@@ -229,7 +171,7 @@ public sealed partial class S7Client : IAsyncDisposable
         var entry = new S7LogEntry
         {
             Timestamp = DateTimeOffset.UtcNow,
-            Operation = "Reconnect",
+            Operation = "Session",
             Stage = S7OperationStage.Reconnect,
             Succeeded = false,
             ErrorCode = S7ErrorCode.SessionReconnecting

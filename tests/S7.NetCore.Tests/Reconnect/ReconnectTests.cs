@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Reflection;
 using S7.NetCore;
 using S7.NetCore.Internal;
 using S7.NetCore.Tests;
@@ -7,213 +9,281 @@ namespace S7.NetCore.Tests.Reconnect;
 public sealed class ReconnectTests
 {
     [Fact]
-    public void PolicyDefaultsAndEnumValues_AreStable()
+    public void DefaultOptions_EnableReconnect_AndExposeSingleSwitch()
     {
-        S7ReconnectPolicy policy = S7ReconnectPolicy.Disabled;
-        Assert.False(policy.AutoReconnectEnabled);
-        Assert.Equal(5, policy.MaxAttempts);
-        Assert.Equal(TimeSpan.FromSeconds(1), policy.InitialDelay);
-        Assert.Equal(TimeSpan.FromSeconds(30), policy.MaxDelay);
-        Assert.Equal(2.0, policy.BackoffMultiplier);
-        Assert.Equal(0.2, policy.JitterFactor);
-        Assert.Equal(TimeSpan.FromSeconds(10), policy.WaitTimeout);
-        Assert.False(policy.ReconnectOnTimeout);
-        Assert.False(policy.ReplayUncertainWrites);
-
-        Assert.Equal(4, (int)S7SessionState.Reconnecting);
-        Assert.Equal(7, (int)S7OperationStage.Reconnect);
-        Assert.Equal(106, (int)S7ErrorCode.InvalidReconnectPolicy);
-        Assert.Equal(204, (int)S7ErrorCode.SessionReconnecting);
-        Assert.Equal(604, (int)S7ErrorCode.ReconnectExhausted);
-        Assert.Equal(605, (int)S7ErrorCode.ReconnectAborted);
-
         var options = new S7ConnectionOptions
         {
             IpAddress = "127.0.0.1",
             CpuType = S7CpuType.S71200
         };
-        Assert.Same(S7ReconnectPolicy.Disabled, options.Reconnect);
+
+        Assert.True(options.AutoReconnectEnabled);
+
+        PropertyInfo[] reconnectMembers = typeof(S7ConnectionOptions)
+            .GetProperties()
+            .Where(static property => property.Name.Contains("Reconnect", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Single(reconnectMembers);
+        Assert.Equal(nameof(S7ConnectionOptions.AutoReconnectEnabled), reconnectMembers[0].Name);
+
+        Assert.Null(typeof(S7Client).Assembly.GetType("S7.NetCore.S7ReconnectPolicy"));
+        Assert.Null(typeof(S7Client).GetEvent("ReconnectEvent"));
+        Assert.Null(typeof(S7LogEntry).GetProperty("MaxAttempts"));
     }
 
     [Fact]
-    public void InvalidPolicies_AreRejectedBeforeAnyConnect()
+    public void ResultTypes_DoNotExposeReconnectMetadata()
     {
-        AssertPolicyRejected(new S7ReconnectPolicy { MaxAttempts = -1 }, S7ErrorCode.InvalidReconnectPolicy);
-        AssertPolicyRejected(new S7ReconnectPolicy { MaxAttempts = 101 }, S7ErrorCode.InvalidReconnectPolicy);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { InitialDelay = TimeSpan.FromMilliseconds(50) },
-            S7ErrorCode.InvalidTimeout);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { MaxDelay = TimeSpan.FromMilliseconds(500) },
-            S7ErrorCode.InvalidTimeout);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { InitialDelay = TimeSpan.FromSeconds(10), MaxDelay = TimeSpan.FromSeconds(1) },
-            S7ErrorCode.InvalidReconnectPolicy);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { WaitTimeout = TimeSpan.FromSeconds(121) },
-            S7ErrorCode.InvalidTimeout);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { BackoffMultiplier = 0.9 },
-            S7ErrorCode.InvalidReconnectPolicy);
-        AssertPolicyRejected(
-            new S7ReconnectPolicy { JitterFactor = 0.51 },
-            S7ErrorCode.InvalidReconnectPolicy);
-    }
+        Type[] types =
+        [
+            typeof(S7TypedReadResult),
+            typeof(S7StructReadResult<>),
+            typeof(S7BatchReadResult),
+            typeof(S7BatchWriteResult),
+            typeof(S7TypedBatchReadResult),
+            typeof(S7TypedBatchWriteResult)
+        ];
+        string[] members = ["RecoveryCount", "Retried", "ReplayAttempted", "ReplayedBytes"];
 
-    [Fact]
-    public void Backoff_MatchesExpectedSequenceAndJitterBounds()
-    {
-        var policy = new S7ReconnectPolicy
+        foreach (Type type in types)
         {
-            InitialDelay = TimeSpan.FromSeconds(1),
-            MaxDelay = TimeSpan.FromSeconds(30),
-            BackoffMultiplier = 2.0,
-            JitterFactor = 0
-        };
-
-        Assert.Equal(TimeSpan.Zero, BackoffDelayCalculator.Calculate(1, policy));
-        Assert.Equal(TimeSpan.FromSeconds(1), BackoffDelayCalculator.Calculate(2, policy));
-        Assert.Equal(TimeSpan.FromSeconds(2), BackoffDelayCalculator.Calculate(3, policy));
-        Assert.Equal(TimeSpan.FromSeconds(4), BackoffDelayCalculator.Calculate(4, policy));
-        Assert.Equal(TimeSpan.FromSeconds(8), BackoffDelayCalculator.Calculate(5, policy));
-        Assert.Equal(TimeSpan.FromSeconds(16), BackoffDelayCalculator.Calculate(6, policy));
-        Assert.Equal(TimeSpan.FromSeconds(30), BackoffDelayCalculator.Calculate(7, policy));
-
-        var jittered = policy with { JitterFactor = 0.2 };
-        Assert.Equal(TimeSpan.FromSeconds(3.2), BackoffDelayCalculator.Calculate(4, jittered, () => 0.0));
-        Assert.Equal(TimeSpan.FromSeconds(4.8), BackoffDelayCalculator.Calculate(4, jittered, () => 1.0));
+            foreach (string member in members)
+            {
+                Assert.Null(type.GetProperty(member));
+            }
+        }
     }
 
     [Fact]
-    public async Task ConnectionLoss_ReconnectsAndReadRecovers()
+    public void PlaceholderErrorCodes_AreNotObsolete()
+    {
+        Assert.Null(GetObsolete(nameof(S7ErrorCode.InvalidReconnectPolicy)));
+        Assert.Null(GetObsolete(nameof(S7ErrorCode.ReconnectExhausted)));
+        Assert.Null(GetObsolete(nameof(S7ErrorCode.ReconnectAborted)));
+        Assert.Equal(106, (int)S7ErrorCode.InvalidReconnectPolicy);
+        Assert.Equal(604, (int)S7ErrorCode.ReconnectExhausted);
+        Assert.Equal(605, (int)S7ErrorCode.ReconnectAborted);
+    }
+
+    [Fact]
+    public void BackoffSequence_IsFixedWithoutJitter()
+    {
+        Assert.Equal(TimeSpan.Zero, BackoffDelayCalculator.Calculate(1));
+        Assert.Equal(TimeSpan.FromSeconds(1), BackoffDelayCalculator.Calculate(2));
+        Assert.Equal(TimeSpan.FromSeconds(2), BackoffDelayCalculator.Calculate(3));
+        Assert.Equal(TimeSpan.FromSeconds(4), BackoffDelayCalculator.Calculate(4));
+        Assert.Equal(TimeSpan.FromSeconds(8), BackoffDelayCalculator.Calculate(5));
+        Assert.Equal(TimeSpan.FromSeconds(16), BackoffDelayCalculator.Calculate(6));
+        Assert.Equal(TimeSpan.FromSeconds(30), BackoffDelayCalculator.Calculate(7));
+        Assert.Equal(TimeSpan.FromSeconds(30), BackoffDelayCalculator.Calculate(8));
+    }
+
+    [Fact]
+    public async Task ConnectionLoss_ReturnsOriginalError_ThenNextReadSucceeds()
     {
         var fake = new FakeTcpTransport();
         fake.Memory[0] = 0x12;
         fake.Memory[1] = 0x34;
         fake.Memory[2] = 0x56;
         fake.Memory[3] = 0x78;
-
+        var logger = new TestLogger();
         var states = new List<S7SessionState>();
-        var reconnectKinds = new List<S7ReconnectEventKind>();
+
         await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy()),
-            transport: fake,
+            CreateOptions(),
+            logger,
+            fake,
             transportFactory: () => fake);
         client.SessionStateChanged += (_, e) => states.Add(e.CurrentState);
-        client.ReconnectEvent += (_, e) => reconnectKinds.Add(e.Kind);
 
         await client.ConnectAsync();
-        fake.FailAfterRequestCount = 3;
-
-        S7ReadResult result = await client.ReadBytesResultAsync(
-            new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
-
-        Assert.Equal(new byte[] { 0x12, 0x34, 0x56, 0x78 }, result.Data.ToArray());
-        Assert.Equal(1, result.RecoveryCount);
-        Assert.True(result.Retried);
-        Assert.Equal(2, fake.ConnectedCount);
-        Assert.Equal(S7SessionState.Connected, client.State);
-        Assert.Contains(S7SessionState.Reconnecting, states);
-        Assert.Equal(
-            new[] { S7ReconnectEventKind.AttemptStarted, S7ReconnectEventKind.Reconnected },
-            reconnectKinds);
-    }
-
-    [Fact]
-    public async Task TypedRead_CarriesRecoveryMetadata()
-    {
-        var fake = new FakeTcpTransport();
-        fake.Memory[0] = 0x00;
-        fake.Memory[1] = 0x2A;
-
-        await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy()),
-            transport: fake,
-            transportFactory: () => fake);
-        await client.ConnectAsync();
-        fake.FailAfterRequestCount = 3;
-
-        S7TypedReadResult result = await client.ReadValueAsync(
-            new S7TypedReadRequest("DB1.DBW0", S7DataType.Int));
-
-        Assert.Equal((short)42, result.Value.AsInt16());
-        Assert.Equal(1, result.RecoveryCount);
-        Assert.True(result.Retried);
-    }
-
-    [Fact]
-    public async Task WaitTimeoutZero_ReturnsSessionReconnecting()
-    {
-        var fake = new FakeTcpTransport();
-        await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy(waitTimeout: TimeSpan.Zero)),
-            transport: fake,
-            transportFactory: () => fake);
-        await client.ConnectAsync();
-        fake.FailConnectAttempts = 1;
+        SessionSnapshot before = client.Snapshot;
         fake.FailAfterRequestCount = 3;
 
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
-            client.ReadBytesResultAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+
+        Assert.Equal(S7ErrorCode.ConnectionReset, exception.ErrorCode);
+        Assert.Equal(S7OperationStage.Read, exception.Stage);
+
+        await WaitUntilAsync(() => client.State == S7SessionState.Connected && fake.ConnectedCount >= 2);
+
+        ReadOnlyMemory<byte> data = await client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
+        Assert.Equal(new byte[] { 0x12, 0x34, 0x56, 0x78 }, data.ToArray());
+        Assert.Contains(S7SessionState.Reconnecting, states);
+        Assert.Equal(S7SessionState.Connected, states[^1]);
+
+        SessionSnapshot after = client.Snapshot;
+        Assert.NotEqual(before.SessionId, after.SessionId);
+        Assert.True(after.NegotiatedPduSize > 0);
+    }
+
+    [Fact]
+    public async Task FirstReconnectAttempt_HasNoBackoff()
+    {
+        var fake = new FakeTcpTransport();
+        var logger = new TestLogger();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
+            logger,
+            fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Connected && fake.ConnectedCount >= 2);
+
+        S7LogEntry firstAttempt = logger.Records
+            .Where(record => record.Entry.Operation == "Reconnect" && record.Entry.Attempt == 1)
+            .Select(record => record.Entry)
+            .First();
+        Assert.Equal(TimeSpan.Zero, firstAttempt.ReconnectDelay);
+    }
+
+    [Fact]
+    public async Task ExplicitFalse_KeepsBaselineFaultedBehavior()
+    {
+        var fake = new FakeTcpTransport();
+        await using S7Client client = new S7Client(
+            CreateOptions(autoReconnectEnabled: false),
+            transport: fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailAfterRequestCount = 3;
+
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+
+        Assert.Equal(S7ErrorCode.ConnectionReset, exception.ErrorCode);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.Equal(1, fake.ConnectedCount);
+
+        S7ClientException followUp = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        Assert.Equal(S7ErrorCode.SessionFaulted, followUp.ErrorCode);
+    }
+
+    [Fact]
+    public async Task ReadDuringReconnect_FailsFastWith204()
+    {
+        var fake = new FakeTcpTransport();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
+            transport: fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailConnectAttempts = 5;
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
+
+        long start = Stopwatch.GetTimestamp();
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
 
         Assert.Equal(S7ErrorCode.SessionReconnecting, exception.ErrorCode);
         Assert.Equal(S7OperationStage.Read, exception.Stage);
-    }
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(500));
 
-    [Fact]
-    public async Task ReconnectExhausted_Returns604AndDisconnects()
-    {
-        var fake = new FakeTcpTransport();
-        await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy(maxAttempts: 2)),
-            transport: fake,
-            transportFactory: () => fake);
-        await client.ConnectAsync();
-        fake.FailConnectAttempts = 2;
-        fake.FailAfterRequestCount = 3;
-
-        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
-            client.ReadBytesResultAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
-
-        Assert.Equal(S7ErrorCode.ReconnectExhausted, exception.ErrorCode);
-        Assert.Equal(S7OperationStage.Reconnect, exception.Stage);
+        await client.DisconnectAsync();
         Assert.Equal(S7SessionState.Disconnected, client.State);
     }
 
     [Fact]
-    public async Task UncertainWrite_IsNotReplayedByDefault()
+    public async Task CancelledRequestDuringReconnect_Returns603()
     {
         var fake = new FakeTcpTransport();
         await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy()),
+            CreateOptions(),
+            transport: fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailConnectAttempts = 5;
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
+
+        using var cancellation = new CancellationTokenSource();
+        cancellation.Cancel();
+
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4), cancellation.Token));
+
+        Assert.Equal(S7ErrorCode.OperationCancelled, exception.ErrorCode);
+        Assert.Equal(S7ErrorCategory.Cancelled, exception.Category);
+
+        await client.DisconnectAsync();
+    }
+
+    [Fact]
+    public async Task WriteDuringReconnect_Returns204_WithoutReplay()
+    {
+        var fake = new FakeTcpTransport();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
+            transport: fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailConnectAttempts = 5;
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
+
+        int writeFramesBefore = CountWriteFrames(fake);
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.WriteBytesAsync(new S7WriteRequest(S7Area.DataBlock, 1, 0, new byte[] { 1, 2, 3, 4 })));
+
+        Assert.Equal(S7ErrorCode.SessionReconnecting, exception.ErrorCode);
+        Assert.Equal(writeFramesBefore, CountWriteFrames(fake));
+
+        await client.DisconnectAsync();
+    }
+
+    [Fact]
+    public async Task UncertainWrite_IsNeverReplayed()
+    {
+        var fake = new FakeTcpTransport();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
             transport: fake,
             transportFactory: () => fake);
         await client.ConnectAsync();
         fake.FailAfterRequestCount = 3;
 
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
-            client.WriteBytesResultAsync(
-                new S7WriteRequest(S7Area.DataBlock, 1, 0, new byte[] { 1, 2, 3, 4 })));
+            client.WriteBytesAsync(new S7WriteRequest(S7Area.DataBlock, 1, 0, new byte[] { 1, 2, 3, 4 })));
 
         Assert.Equal(S7ErrorCode.ConnectionReset, exception.ErrorCode);
         Assert.True(exception.WriteOutcomeUncertain);
-        Assert.Equal(1, fake.ReceivedFrames.Count(frame => frame.Length > 17 && frame[17] == 0x05));
+        Assert.Equal(1, CountWriteFrames(fake));
+
+        await WaitUntilAsync(() => client.State == S7SessionState.Connected && fake.ConnectedCount >= 2);
+        Assert.Equal(1, CountWriteFrames(fake));
     }
 
     [Fact]
-    public async Task Snapshot_ReportsReconnectingState()
+    public async Task Snapshot_ReportsReconnectingState_WithFourFields()
     {
         var fake = new FakeTcpTransport();
         await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy(maxAttempts: 0, initialDelay: TimeSpan.FromSeconds(1), maxDelay: TimeSpan.FromSeconds(1))),
+            CreateOptions(),
             transport: fake,
             transportFactory: () => fake);
         await client.ConnectAsync();
-        fake.FailConnectAttempts = 1;
+        fake.FailConnectAttempts = 5;
         fake.FailAfterRequestCount = 3;
 
-        Task<S7ReadResult> readTask = client.ReadBytesResultAsync(
-            new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
         await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
 
         SessionSnapshot snapshot = client.Snapshot;
@@ -221,37 +291,129 @@ public sealed class ReconnectTests
         Assert.True(snapshot.AutoReconnectEnabled);
         Assert.Equal(Guid.Empty, snapshot.SessionId);
         Assert.Equal(0, snapshot.NegotiatedPduSize);
-        Assert.True(snapshot.ReconnectAttempt >= 1);
+        Assert.Null(typeof(SessionSnapshot).GetProperty("ReconnectAttempt"));
+        Assert.Null(typeof(SessionSnapshot).GetProperty("LastReconnectAt"));
+        Assert.Null(typeof(SessionSnapshot).GetProperty("NextReconnectDelay"));
 
         await client.DisconnectAsync();
-        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() => readTask);
-        Assert.Equal(S7ErrorCode.ReconnectAborted, exception.ErrorCode);
     }
 
     [Fact]
-    public async Task DisconnectWhileReconnecting_AbortsWaitWith605()
+    public async Task DisconnectWhileReconnecting_StopsWithinOneSecond()
+    {
+        var fake = new FakeTcpTransport();
+        var logger = new TestLogger();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
+            logger,
+            fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailConnectAttempts = 5;
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
+
+        long start = Stopwatch.GetTimestamp();
+        await client.DisconnectAsync();
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+        Assert.True(elapsed < TimeSpan.FromSeconds(1));
+        Assert.Equal(S7SessionState.Disconnected, client.State);
+        Assert.DoesNotContain(logger.Records, static record => record.Entry.ErrorCode == S7ErrorCode.ReconnectAborted);
+        Assert.Contains(
+            logger.Records,
+            static record => record.Level == S7LogLevel.Warning && record.Entry.Operation == "Reconnect");
+    }
+
+    [Fact]
+    public async Task ConnectWhileReconnecting_Returns201()
     {
         var fake = new FakeTcpTransport();
         await using S7Client client = new S7Client(
-            CreateOptions(EnabledPolicy(
-                maxAttempts: 0,
-                initialDelay: TimeSpan.FromSeconds(1),
-                maxDelay: TimeSpan.FromSeconds(1))),
+            CreateOptions(),
             transport: fake,
             transportFactory: () => fake);
         await client.ConnectAsync();
-        fake.FailConnectAttempts = 1;
+        fake.FailConnectAttempts = 5;
         fake.FailAfterRequestCount = 3;
 
-        Task<S7ReadResult> readTask = client.ReadBytesResultAsync(
-            new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
         await WaitUntilAsync(() => client.State == S7SessionState.Reconnecting);
-        await client.DisconnectAsync();
 
-        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() => readTask);
-        Assert.Equal(S7ErrorCode.ReconnectAborted, exception.ErrorCode);
-        Assert.Equal(S7OperationStage.Reconnect, exception.Stage);
-        Assert.Equal(S7SessionState.Disconnected, client.State);
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() => client.ConnectAsync());
+        Assert.Equal(S7ErrorCode.SessionAlreadyConnected, exception.ErrorCode);
+        Assert.Equal(1, fake.ConnectedCount);
+
+        await client.DisconnectAsync();
+    }
+
+    [Fact]
+    public async Task ReconnectLog_ContainsAttemptAndDelay_WithoutMaxAttempts()
+    {
+        var fake = new FakeTcpTransport();
+        var logger = new TestLogger();
+        await using S7Client client = new S7Client(
+            CreateOptions(),
+            logger,
+            fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.FailAfterRequestCount = 3;
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        await WaitUntilAsync(() => client.State == S7SessionState.Connected && fake.ConnectedCount >= 2);
+
+        S7LogEntry[] reconnectEntries = logger.Records
+            .Where(static record => record.Entry.Operation == "Reconnect")
+            .Select(static record => record.Entry)
+            .ToArray();
+
+        Assert.NotEmpty(reconnectEntries);
+        Assert.All(reconnectEntries, static entry => Assert.NotNull(entry.Attempt));
+        Assert.All(reconnectEntries, static entry => Assert.NotNull(entry.ReconnectDelay));
+        Assert.Null(typeof(S7LogEntry).GetProperty("MaxAttempts"));
+    }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public async Task WriteTimeout_KeepsConnected_IndependentOfSwitch(bool autoReconnectEnabled)
+    {
+        var fake = new FakeTcpTransport();
+        await using S7Client client = new S7Client(
+            CreateOptions(autoReconnectEnabled, writeTimeout: TimeSpan.FromSeconds(1)),
+            transport: fake,
+            transportFactory: () => fake);
+        await client.ConnectAsync();
+        fake.RequestInterceptor = request => request.Length > 17 && request[17] == 0x05
+            ? null
+            : fake.DefaultResponseForTest(request);
+
+        S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.WriteBytesAsync(new S7WriteRequest(S7Area.DataBlock, 1, 0, new byte[] { 1 })));
+
+        Assert.Equal(S7ErrorCode.WriteTimeout, exception.ErrorCode);
+        Assert.Equal(S7ErrorCategory.Timeout, exception.Category);
+        Assert.True(exception.WriteOutcomeUncertain);
+        Assert.Equal(S7SessionState.Connected, client.State);
+        Assert.Equal(1, fake.ConnectedCount);
+    }
+
+    private static ObsoleteAttribute? GetObsolete(string fieldName)
+    {
+        FieldInfo? field = typeof(S7ErrorCode).GetField(fieldName);
+        Assert.NotNull(field);
+        return field.GetCustomAttribute<ObsoleteAttribute>();
+    }
+
+    private static int CountWriteFrames(FakeTcpTransport fake)
+    {
+        return fake.ReceivedFrames.Count(static frame => frame.Length > 17 && frame[17] == 0x05);
     }
 
     private static async Task WaitUntilAsync(Func<bool> condition)
@@ -268,39 +430,9 @@ public sealed class ReconnectTests
         }
     }
 
-    private static void AssertPolicyRejected(S7ReconnectPolicy policy, S7ErrorCode expectedCode)
-    {
-        var fake = new FakeTcpTransport();
-        S7ClientException exception = Assert.Throws<S7ClientException>(
-            () => new S7Client(CreateOptions(policy), transport: fake));
-        Assert.Equal(expectedCode, exception.ErrorCode);
-        Assert.Equal(S7OperationStage.Validate, exception.Stage);
-        Assert.Equal(0, fake.ConnectedCount);
-    }
-
-    private static S7ReconnectPolicy EnabledPolicy(
-        int maxAttempts = 3,
-        TimeSpan? initialDelay = null,
-        TimeSpan? maxDelay = null,
-        TimeSpan? waitTimeout = null,
-        bool reconnectOnTimeout = false,
-        bool replayUncertainWrites = false)
-    {
-        return new S7ReconnectPolicy
-        {
-            AutoReconnectEnabled = true,
-            MaxAttempts = maxAttempts,
-            InitialDelay = initialDelay ?? TimeSpan.FromMilliseconds(100),
-            MaxDelay = maxDelay ?? TimeSpan.FromSeconds(1),
-            BackoffMultiplier = 1.0,
-            JitterFactor = 0,
-            WaitTimeout = waitTimeout ?? TimeSpan.FromSeconds(5),
-            ReconnectOnTimeout = reconnectOnTimeout,
-            ReplayUncertainWrites = replayUncertainWrites
-        };
-    }
-
-    private static S7ConnectionOptions CreateOptions(S7ReconnectPolicy policy)
+    private static S7ConnectionOptions CreateOptions(
+        bool autoReconnectEnabled = true,
+        TimeSpan? writeTimeout = null)
     {
         return new S7ConnectionOptions
         {
@@ -310,9 +442,9 @@ public sealed class ReconnectTests
             Slot = 1,
             ConnectTimeout = TimeSpan.FromSeconds(2),
             ReadTimeout = TimeSpan.FromSeconds(2),
-            WriteTimeout = TimeSpan.FromSeconds(2),
+            WriteTimeout = writeTimeout ?? TimeSpan.FromSeconds(2),
             RequestedPduSize = 480,
-            Reconnect = policy
+            AutoReconnectEnabled = autoReconnectEnabled
         };
     }
 }

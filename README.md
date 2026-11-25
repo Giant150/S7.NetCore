@@ -29,7 +29,7 @@
 - 扁平结构体读写：公共实例字段按声明顺序连续映射，支持数值与带容量标注的字符串字段
 - 统一错误模型（六类错误 + 稳定错误码 + PLC 原始返回码）
 - 结构化诊断日志、可选帧级协议跟踪、日志失败隔离
-- 断线自动重连（默认关闭；连接类故障触发，含退避、请求等待与结果恢复元数据）
+- 断线自动重连（默认开启，可用 `AutoReconnectEnabled` 关闭；连接类故障触发，首次立即重连、失败后固定退避，重连期间读写立即返回 204）
 - 纯托管实现，无 `DllImport`、无原生 Snap7 库、无第三方 S7 通讯库
 
 **明确不做**
@@ -243,7 +243,7 @@ catch (S7ClientException ex)
 - 排队深度由 `MaxQueuedRequests` 限制（默认 32），超出返回 `QueueOverflow`
 - 已连接时重复连接返回 `SessionAlreadyConnected`
 - `DisconnectAsync` 幂等；`Faulted` 状态下读写返回 `SessionFaulted`，需显式断开后重连
-- 默认不自动重连；启用 `Reconnect` 后按策略恢复。重连期间读写等待窗口到期返回 `SessionReconnecting`(204)，重连耗尽返回 `ReconnectExhausted`(604)，被显式断开或客户端释放中止返回 `ReconnectAborted`(605)
+- 断线自动重连默认开启；显式设置 `AutoReconnectEnabled = false` 可退回基线。仅连接类故障触发，显式连接失败与读写超时均不触发；重连期间读写立即返回 `SessionReconnecting`(204)，写入永不重放
 
 ## 批量读写
 
@@ -335,7 +335,7 @@ if (group.Count > 0)
 
 - 部分失败默认不抛异常：逐条返回 `Succeeded` / `ErrorCode` / `PlcReturnCode`，整批 `Failures` 按索引升序；`EnsureAllSucceeded()` 仅在需要「全成功」语义时抛 `BatchItemFailed`(144)，并携带失败明细、`SucceededItemCount` 与已写字节。
 - 批量写条目目标字节区间不得重叠（含两个位条目落在同一字节）；冲突返回 `BatchAddressConflict`(143)，首尾相接不视为冲突。读条目允许重复或重叠，逐条独立返回。
-- 位条目写入的已写字节按 1 计；批量不做回读校验。结果对象的 `RecoveryCount` / `Retried` 与单点一致，`ReplayAttempted` / `ReplayedBytes` 仅写侧提供。
+- 位条目写入的已写字节按 1 计；批量不做回读校验。批量结果仅包含逐条数据、失败明细与实际写入字节数，不携带重连元数据。
 
 ## 结构体读写
 
@@ -383,12 +383,12 @@ await client.WriteStructAsync("DB2.DBB0", new MotorData
 - 类型约束为 `where T : struct` + 运行时纯度检查：无引用等价 `unmanaged`；仅允许 `string` 引用字段，其他引用/嵌套/数组/枚举/`DateTime`/`decimal`/可空返回 `DataTypeNotSupported`(132)。该取舍用于同时支持 `string` 字段（字面 `unmanaged` 约束会禁止 `string`）。
 - 布局非法返回 `StructLayoutInvalid`(139)：空布局、重复/错位标注、容量越界、总长越界、`LayoutKind.Explicit` 或 `FieldOffset`。
 - `[StructLayout(LayoutKind.Sequential/Auto, Pack=...)]` 允许存在，但不参与偏移与长度计算；`LayoutKind.Explicit` 被拒绝。
-- 读取整段一次请求（分包由会话层完成），全有或全无；写入先完成全部字段校验与编码，失败零发送。重连与写入进度语义与字节读写一致。
+- 读取整段一次请求（分包由会话层完成），全有或全无；写入先完成全部字段校验与编码，失败零发送。写入进度语义与字节读写一致，结果不携带重连元数据。
 - 日志只记录类型名、映射字段数、地址、长度、错误码，不记录任何字段值。
 
 ## 断线自动重连
 
-自动重连默认关闭；通过 `S7ConnectionOptions.Reconnect` 显式启用。仅连接类故障触发（读写超时默认不触发），初次显式连接失败不触发。重连期间同一会话的读写请求在等待窗口内等待恢复；单次调用最多因重连恢复一次。
+自动重连默认开启，业务层无需关心设备断线；只有需要旧行为时才显式关闭。仅已建立会话后的连接类故障触发，显式连接失败与读写超时均不触发。只有一个配置项：
 
 ```csharp
 var options = new S7ConnectionOptions
@@ -397,35 +397,18 @@ var options = new S7ConnectionOptions
     CpuType = S7CpuType.S71200,
     Rack = 0,
     Slot = 1,
-    Reconnect = new S7ReconnectPolicy
-    {
-        AutoReconnectEnabled = true,
-        MaxAttempts = 5,
-        InitialDelay = TimeSpan.FromSeconds(1),
-        MaxDelay = TimeSpan.FromSeconds(30),
-        WaitTimeout = TimeSpan.FromSeconds(10)
-    }
+    AutoReconnectEnabled = true // 默认值；设为 false 退回旧基线
 };
 await using var client = new S7Client(options);
-client.ReconnectEvent += (_, e) => Console.WriteLine($"{e.Kind} attempt={e.Attempt} error={e.ErrorCode}");
 ```
 
-| 策略项 | 默认值 | 取值范围 / 说明 |
-|--------|--------|----------------|
-| `AutoReconnectEnabled` | `false` | 是否启用 |
-| `MaxAttempts` | `5` | 0 至 100；0 表示不限 |
-| `InitialDelay` | `1 s` | 100 ms 至 30 s |
-| `MaxDelay` | `30 s` | 1 至 300 s，且不小于 `InitialDelay` |
-| `BackoffMultiplier` | `2.0` | 1.0 至 10.0 |
-| `JitterFactor` | `0.2` | 0 至 0.5 |
-| `WaitTimeout` | `10 s` | 0 至 120 s；0 表示不等待 |
-| `ReconnectOnTimeout` | `false` | 读写超时是否触发重连 |
-| `ReplayUncertainWrites` | `false` | 结果不确定的写入是否允许重放 |
-
-- 分包读取在断线后从头重读，不跨会话拼接；结果不确定的写入默认直接失败并保留 `BytesWritten` / `WrittenRange` / `WriteOutcomeUncertain`，开启 `ReplayUncertainWrites` 后从首个未确认分段起点继续。
-- 重连成功后会话标识与协商 PDU 更新；`ReadBytesResultAsync` / `WriteBytesResultAsync` / `ReadValueAsync` 携带 `RecoveryCount`（0 或 1）与 `Retried`。
-- 启用重连时应注入 `transportFactory`（每次重连获取新传输实例）；注入单实例 `transport` 且不提供工厂的组合同样能工作于内存假传输，但不适用于 `TcpTransport` 释放后不可复用的场景。
-- 重连期间显式 `ConnectAsync` 返回 `SessionAlreadyConnected`；`DisconnectAsync` / `DisposeAsync` 会中止重连，终态为 `Disconnected`。
+- 断线当次调用立即返回原错误（如 301），不自动重试；后台立即发起首次重连（首次延迟为 0），失败后固定按 `1s → 2s → 4s → 8s → 16s → 30s` 退避，无次数上限、无抖动。
+- 重连期间读写立即返回 `SessionReconnecting`(204)，不等待、不排队；恢复后由调用方下一次读写自然继续。
+- 写入永不重放；结果不确定时保留 `BytesWritten` / `WrittenRange` / `WriteOutcomeUncertain`。
+- 读写超时（601/602）不触发重连、不关闭连接、不改变会话状态；超时后保持已连接并复用同一连接。
+- 重连成功后会话标识与协商 PDU 更新；快照仅包含 `State` / `SessionId` / `NegotiatedPduSize` / `AutoReconnectEnabled`，不提供专用重连事件或结果恢复元数据。
+- 重连期间显式 `ConnectAsync` 返回 `SessionAlreadyConnected`；`DisconnectAsync` / `DisposeAsync` 会在 1 秒内中止重连，终态为 `Disconnected`。
+- 建议注入 `transportFactory`（每次重连获取新传输实例）；注入单实例 `transport` 的组合同样可用于内存假传输，但不适用于 `TcpTransport` 释放后不可复用的场景。
 
 ## 日志与协议跟踪
 
@@ -470,7 +453,7 @@ dotnet build tests/S7.NetCore.Tests/S7.NetCore.Tests.csproj -c Release -f net10.
 
 # 校验四框架产物与 NuGet 包
 pwsh -File tools/build/verify-frameworks.ps1 -Mode Output -Configuration Release
-pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.4.1.0.nupkg
+pwsh -File tools/build/verify-frameworks.ps1 -Mode Package -PackagePath artifacts/packages/SiemensS7.NetCore.5.0.0.nupkg
 ```
 
 ## 嵌入式虚拟 PLC（测试服务器夹具）
@@ -511,13 +494,13 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 | 项目 | 结果 |
 |------|------|
 | 多框架构建（net8.0 / net9.0 / net10.0 / net11.0） | 四框架 Release 通过，0 警告 0 错误；net10.0 为完整测试验证，其余为仅构建验证 |
-| net10.0 全量测试 | 588 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
-| 结构体读写用例 | 新增 22 项：19 项单元（契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志/重连元数据）+ 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
-| 自动重连用例 | 新增 10 项：策略默认值与校验、退避序列、读取恢复、类型化恢复元数据、等待窗口 204、耗尽 604、写入默认不重放、快照、断开中止 605、事件顺序 |
+| net10.0 全量测试 | 593 项通过，失败 0，跳过 0（`dotnet test ... --no-build -f net10.0`） |
+| 结构体读写用例 | 覆盖契约/布局/地址/编解码/读写路径/零发送/跨 PDU/日志，以及 3 项 VirtualPlc（数值回环、字符串三编码回环、PLC 错误映射） |
+| 自动重连用例 | 17 项（含参数化）：默认开关与公开契约、固定退避、断线返回原错误、后台立即首连、重连中 204/603、写入不重放、快照、1 秒内中止、201、日志、超时保持连接；同时移除批量/类型化/结构体结果的重连元数据断言 |
 | `dotnet build`（Debug / Release，warnings-as-errors） | 通过，0 警告 0 错误 |
-| 版本 4.1.0 | `VersionPrefix` = `4.1.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.4.1.0.nupkg` / `.snupkg` |
-| 批量读写用例 | 新增 88 项：容量边界、写重叠、请求校验、多条目协议编解码、结果装配、字节/类型化门面端到端、超时/取消/断线恢复与整批重放 |
-| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `4.1.0` |
+| 版本 5.0.0 | `VersionPrefix` = `5.0.0`，包版本、程序集版本、文件版本与信息版本均由该单一来源派生；包标识仍为 `SiemensS7.NetCore`，包文件为 `SiemensS7.NetCore.5.0.0.nupkg` / `.snupkg` |
+| 批量读写用例 | 覆盖容量边界、写重叠、请求校验、多条目协议编解码、结果装配、字节/类型化门面端到端、超时/取消/断线原错返回与重连后继续 |
+| 版本引用点同步 | `Directory.Build.props`、`tools/naming/inspect.ps1`（从 `VersionPrefix` 派生）、命名测试（从 `Directory.Build.props` 派生）、`tools/build/verify-frameworks.ps1`、`tools/publish/publish-nuget.ps1` 与 README 已同步为 `5.0.0` |
 | 协议与假传输测试 | 244 项全部通过（`FakeTcpTransport` 驱动） |
 | VirtualPlc 用例 | Windows x64 上 68/68 通过（55 项迁移 + 10 项类型化新增 + 3 项结构体新增，嵌入式 S7Server，端点 `127.0.0.1:1102`） |
 | Linux 虚拟 S7Server 验证 | **未执行**；Linux 仅做构建与非虚拟服务器用例，不含虚拟服务器运行结论 |
@@ -556,9 +539,16 @@ spec 5.5.1.8a 的“向 DB1 写 1024 字节”按 D-01 映射为 **DB2 起始 0*
 - 泛型取值：旧写法 `As<T>()` 改为 `ToValue<T>()`；`TryToValue<T>(out T)` 与 `ToValue<T>()` 并存，不保留别名。`ToValue<long>` / `ToValue<ulong>` 受支持，可空目标（如 `ToValue<int?>`）仍不支持；九个强类型访问器（`AsBoolean`、`AsByte`、`AsInt16`、`AsUInt16`、`AsInt32`、`AsUInt32`、`AsSingle`、`AsDouble`、`AsString`）保持不变。
 - 字符串判定：`DataType == S7DataType.String` 改为 `IsStringValue`；需要区分 `String` / `S7String` / `S7WString` 时使用 `StringEncoding`。
 - 批量读写为新增 API，不改动既有单点读写的公开签名与错误语义。
+- 自动重连 5.0.0 迁移：
+  - 删除 `S7ConnectionOptions.Reconnect` 与 `S7ReconnectPolicy`，改为单一布尔开关 `AutoReconnectEnabled`（默认 `true`）；需要旧行为时显式设为 `false`。
+  - 删除 `S7ReadResult` / `S7WriteResult` 及 `ReadBytesResultAsync` / `WriteBytesResultAsync` / `WriteValueResultAsync` / `WriteStructResultAsync`；字节读写改用 `ReadBytesAsync` / `WriteBytesAsync`，类型化与结构体分别使用 `ReadValueAsync` / `WriteValueAsync` / `ReadStructAsync` / `WriteStructAsync`。
+  - 所有结果类型移除 `RecoveryCount` / `Retried` / `ReplayAttempted` / `ReplayedBytes`；删除 `ReconnectEvent` 与 `S7ReconnectEventArgs`；`SessionSnapshot` 仅保留 `State` / `SessionId` / `NegotiatedPduSize` / `AutoReconnectEnabled`。
+  - 默认开启后，断线会短暂进入 `Reconnecting`，期间读写返回 204；断线当次调用仍返回原错误。`106` / `604` / `605` 保留数值但不再产生。
+  - 读写超时（601/602）后保持 `Connected` 并复用连接，不触发重连、不关闭连接、不置 `Faulted`。
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 5.0.0 | 2026-11-25 | 简化断线自动重连：只保留 `S7ConnectionOptions.AutoReconnectEnabled` 一个开关并默认开启；断线当次调用立即返回原错误、后台立即首次重连（首次延迟 0），失败后固定 `1s → 2s → 4s → 8s → 16s → 30s` 退避，无次数上限；重连期间读写立即返回 204、不等待；写入永不重放；删除 `S7ReconnectPolicy` 的 8 项策略、`ReconnectEvent`、`S7ReadResult`/`S7WriteResult` 及所有结果中的重连元数据；快照精简为 4 个字段；`106`/`604`/`605` 保留数值不再产生；读写超时后保持已连接并复用连接；主版本升至 5.0.0 |
 | 4.1.0 | 2026-11-24 | 新增字符串容量后缀地址：`DB1.DBR13.15`（String）、`DB1.DBS13.15`（S7String）、`DB1.DBL13.15`（S7WString）；后缀仅限定允许类型，`DataType` 仍必须显式提供，缺失或不一致返回 133；地址容量与 `Capacity` 同时提供时，0 取地址容量、非 0 必须相等，否则 136；仅 `DBn.` 前缀支持；`DB1.DBB13.15` 仍按 131 拒绝，结构体新后缀按 140 拒绝；删除 `S7.NetCore.Tools` 工具项目（解决方案 3→2）；版本提升至 4.1.0 |
 | 4.0.0 | 2026-11-24 | 新增公开批量读写 API：字节视图 `ReadBatchAsync`/`WriteBatchAsync` 与类型化视图 `ReadTypedBatchAsync`/`WriteTypedBatchAsync`，一次批量调用 = 1 个请求帧 + 1 个响应帧；条目数由当前 PDU 与协议 255 计数字段决定，超限整批拒绝并由调用方分组（PDU 超限 142、条目数超限 146）；部分失败默认不抛异常，`EnsureAllSucceeded()` 为可选出口；批量写条目目标区间重叠禁止（143）；新增 `S7BatchReadItem`/`S7BatchWriteItem`/`S7TypedReadBatchItem`/`S7TypedWriteBatchItem` 与对应结果类型、`S7BatchItemFailure`、错误码 141～146；除已声明的 `As<T>()` → `ToValue<T>` 迁移与字符串标注精确化外，既有 API 不变；单点读取内部实现（含 `S7Value` 承载）允许变更但对外契约不变；字符串结果标注精确化为 `String`/`S7String`/`S7WString`（`StringEncoding`），`S7Value` 承载扩展为已声明行为变更；主版本升级对应上述新增与行为变更 |
 | 3.0.0 | 2026-11-22 | 版本号跨主版本提升至 3.0.0（主版本 2 → 3）；包版本与程序集版本同步为 3.0.0；NuGet 包标识经用户确认回退为 `SiemensS7.NetCore`（第一轮 `Siemens.S7.NetCore` 停止使用，不再发布新版本），包文件为 `SiemensS7.NetCore.3.0.0.nupkg` / `.snupkg`；项目名称、程序集名与根命名空间保持不变 |

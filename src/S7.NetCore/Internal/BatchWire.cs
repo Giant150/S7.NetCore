@@ -21,18 +21,3 @@ internal readonly record struct BatchReadRawItem(
 
 /// <summary>批量写原始条目结果。</summary>
 internal readonly record struct BatchWriteRawItem(byte ReturnCode);
-
-/// <summary>批量读单次往返结果。</summary>
-internal readonly record struct BatchReadRawResult(
-    BatchReadRawItem[] Items,
-    int RecoveryCount,
-    bool Retried);
-
-/// <summary>批量写单次往返结果。</summary>
-internal readonly record struct BatchWriteRawResult(
-    BatchWriteRawItem[] Items,
-    int RecoveryCount,
-    bool Retried,
-    bool ReplayAttempted,
-    int ReplayedBytes,
-    int BytesWritten);

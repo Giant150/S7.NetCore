@@ -164,14 +164,10 @@ public sealed class S7BatchReadResult
 {
     internal S7BatchReadResult(
         IReadOnlyList<S7BatchReadItemResult> items,
-        IReadOnlyList<S7BatchItemFailure> failures,
-        int recoveryCount,
-        bool retried)
+        IReadOnlyList<S7BatchItemFailure> failures)
     {
         Items = new ReadOnlyCollection<S7BatchReadItemResult>(items as IList<S7BatchReadItemResult> ?? items.ToArray());
         Failures = new ReadOnlyCollection<S7BatchItemFailure>(failures as IList<S7BatchItemFailure> ?? failures.ToArray());
-        RecoveryCount = recoveryCount;
-        Retried = retried;
     }
 
     /// <summary>逐条结果，数量与顺序恒等于请求。</summary>
@@ -182,12 +178,6 @@ public sealed class S7BatchReadResult
 
     /// <summary>是否全部条目成功。</summary>
     public bool AllSucceeded => Failures.Count == 0;
-
-    /// <summary>本次调用中因重连恢复的次数，取值 0 或 1。</summary>
-    public int RecoveryCount { get; }
-
-    /// <summary>是否在重连恢复后重试并成功。</summary>
-    public bool Retried { get; }
 
     /// <summary>全部成功时直接返回；存在失败时抛 144 并携带明细。</summary>
     public void EnsureAllSucceeded()
@@ -207,19 +197,11 @@ public sealed class S7BatchWriteResult
     internal S7BatchWriteResult(
         IReadOnlyList<S7BatchWriteItemResult> items,
         IReadOnlyList<S7BatchItemFailure> failures,
-        int bytesWritten,
-        int recoveryCount,
-        bool retried,
-        bool replayAttempted,
-        int replayedBytes)
+        int bytesWritten)
     {
         Items = new ReadOnlyCollection<S7BatchWriteItemResult>(items as IList<S7BatchWriteItemResult> ?? items.ToArray());
         Failures = new ReadOnlyCollection<S7BatchItemFailure>(failures as IList<S7BatchItemFailure> ?? failures.ToArray());
         BytesWritten = bytesWritten;
-        RecoveryCount = recoveryCount;
-        Retried = retried;
-        ReplayAttempted = replayAttempted;
-        ReplayedBytes = replayedBytes;
     }
 
     /// <summary>逐条结果，数量与顺序恒等于请求。</summary>
@@ -233,18 +215,6 @@ public sealed class S7BatchWriteResult
 
     /// <summary>成功条目数据长度之和；位条目计 1。</summary>
     public int BytesWritten { get; }
-
-    /// <summary>本次调用中因重连恢复的次数，取值 0 或 1。</summary>
-    public int RecoveryCount { get; }
-
-    /// <summary>是否在重连恢复后重试并成功。</summary>
-    public bool Retried { get; }
-
-    /// <summary>是否因结果不确定而启用重放。</summary>
-    public bool ReplayAttempted { get; }
-
-    /// <summary>实际重放的数据总字节数；未重放为 0。</summary>
-    public int ReplayedBytes { get; }
 
     /// <summary>全部成功时直接返回；存在失败时抛 144 并携带明细。</summary>
     public void EnsureAllSucceeded()
@@ -283,12 +253,6 @@ public sealed class S7TypedBatchReadResult
     /// <summary>失败条目明细。</summary>
     public IReadOnlyList<S7BatchItemFailure> Failures { get; }
 
-    /// <summary>本次调用中因重连恢复的次数。</summary>
-    public int RecoveryCount => ByteResult.RecoveryCount;
-
-    /// <summary>是否在重连恢复后重试并成功。</summary>
-    public bool Retried => ByteResult.Retried;
-
     /// <summary>全部成功时直接返回；存在失败时抛 144 并携带明细。</summary>
     public void EnsureAllSucceeded()
     {
@@ -326,12 +290,6 @@ public sealed class S7TypedBatchWriteResult
 
     /// <summary>成功条目数据长度之和；位条目计 1。</summary>
     public int BytesWritten => ByteResult.BytesWritten;
-
-    /// <summary>本次调用中因重连恢复的次数。</summary>
-    public int RecoveryCount => ByteResult.RecoveryCount;
-
-    /// <summary>是否在重连恢复后重试并成功。</summary>
-    public bool Retried => ByteResult.Retried;
 
     /// <summary>全部成功时直接返回；存在失败时抛 144 并携带明细。</summary>
     public void EnsureAllSucceeded()
