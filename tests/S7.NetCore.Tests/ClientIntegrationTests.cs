@@ -325,9 +325,7 @@ public sealed class ClientIntegrationTests
         await using S7Client client = new(options, transport: transport);
         await client.ConnectAsync();
 
-        transport.RequestInterceptor = request => request.Length > 17 && request[17] == 0x05
-            ? null
-            : transport.DefaultResponseForTest(request);
+        transport.WriteResponseDelay = TimeSpan.FromMilliseconds(1500);
 
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(
             () => client.WriteBytesAsync(new S7WriteRequest(S7Area.Memory, 0, 0, new byte[] { 1 })));

@@ -268,22 +268,18 @@ ValidateWriteCapacity(wires);
 
     private void LogBatchValidationFailure(string operation, int itemCount, S7ClientException exception)
     {
-        if (!_logger.IsEnabled(S7LogLevel.Warning))
+        var request = new FailureLogRequest
         {
-            return;
-        }
-
-        var entry = new S7LogEntry
-        {
-            Timestamp = DateTimeOffset.UtcNow,
+            Level = S7LogLevel.Warning,
             Operation = operation,
             Stage = exception.Stage,
             ItemCount = itemCount,
             FailedItemCount = itemCount,
             SucceededItemCount = 0,
-            Succeeded = false,
-            ErrorCode = exception.ErrorCode
+            ErrorCode = exception.ErrorCode,
+            Cause = exception
         };
-        _session.PostFailureLog(S7LogLevel.Warning, in entry, exception);
+
+        _session.PostFailureLog(in request);
     }
 }

@@ -211,14 +211,37 @@ public sealed partial class S7Client
         S7Address? parsed = null)
     {
         S7LogLevel level = succeeded ? S7LogLevel.Information : S7LogLevel.Warning;
-        if (!_logger.IsEnabled(level))
+
+        if (succeeded)
         {
+            if (!_logger.IsEnabled(level))
+            {
+                return;
+            }
+
+            var entry = new S7LogEntry
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Operation = operation,
+                Stage = stage,
+                Area = parsed?.Area,
+                DbNumber = parsed?.DbNumber,
+                StartByte = parsed?.StartByte,
+                Length = totalLength,
+                Elapsed = Stopwatch.GetElapsedTime(startTimestamp),
+                Succeeded = true,
+                ErrorCode = errorCode,
+                AddressExpression = address,
+                StructTypeName = structType.Name,
+                MappedFieldCount = fieldCount
+            };
+            _logger.Log(level, in entry, exception);
             return;
         }
 
-        var entry = new S7LogEntry
+        var request = new FailureLogRequest
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Level = S7LogLevel.Warning,
             Operation = operation,
             Stage = stage,
             Area = parsed?.Area,
@@ -226,21 +249,14 @@ public sealed partial class S7Client
             StartByte = parsed?.StartByte,
             Length = totalLength,
             Elapsed = Stopwatch.GetElapsedTime(startTimestamp),
-            Succeeded = succeeded,
             ErrorCode = errorCode,
             AddressExpression = address,
             StructTypeName = structType.Name,
-            MappedFieldCount = fieldCount
+            MappedFieldCount = fieldCount,
+            Cause = exception
         };
 
-        if (succeeded)
-        {
-            _logger.Log(level, in entry, exception);
-        }
-        else
-        {
-            _session.PostFailureLog(level, in entry, exception);
-        }
+        _session.PostFailureLog(in request);
     }
 
     private static string StructContext(Type structType, in S7Address address, int totalLength)

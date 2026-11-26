@@ -11,13 +11,24 @@ internal sealed class SideEffectPump
     private readonly Channel<SideEffect> _queue;
     private readonly IS7Logger _logger;
     private readonly Action<S7SessionStateChangedEventArgs> _dispatchNotification;
+    private readonly TimeProvider _timeProvider;
     private readonly Task _worker;
     private volatile bool _abandoned;
 
-    internal SideEffectPump(IS7Logger logger, Action<S7SessionStateChangedEventArgs> dispatchNotification)
+    /// <summary>
+    /// 初始化副作用泵。
+    /// </summary>
+    /// <param name="logger">日志设施。</param>
+    /// <param name="dispatchNotification">通知派发回调。</param>
+    /// <param name="timeProvider">时间源，用于生成通知时间戳。</param>
+    internal SideEffectPump(
+        IS7Logger logger,
+        Action<S7SessionStateChangedEventArgs> dispatchNotification,
+        TimeProvider timeProvider)
     {
         _logger = logger;
         _dispatchNotification = dispatchNotification;
+        _timeProvider = timeProvider;
         _queue = Channel.CreateUnbounded<SideEffect>(new UnboundedChannelOptions
         {
             SingleReader = true,
@@ -27,16 +38,42 @@ internal sealed class SideEffectPump
         _worker = Task.Run(RunAsync);
     }
 
-    internal void PostNotification(S7SessionStateChangedEventArgs args)
+    /// <summary>
+    /// 投递一条状态迁移通知。
+    /// </summary>
+    /// <param name="previous">迁移前状态。</param>
+    /// <param name="current">迁移后状态。</param>
+    /// <param name="sessionId">会话标识。</param>
+    internal void PostNotification(S7SessionState previous, S7SessionState current, Guid sessionId)
     {
-        _queue.Writer.TryWrite(SideEffect.CreateNotification(args));
+        _queue.Writer.TryWrite(SideEffect.CreateNotification(previous, current, sessionId));
     }
 
+    /// <summary>
+    /// 投递一条已构造好的失败日志（保留给内部既有调用点；级别判定在泵内统一执行）。
+    /// </summary>
+    /// <param name="level">日志级别。</param>
+    /// <param name="entry">日志条目。</param>
+    /// <param name="cause">关联异常。</param>
     internal void PostFailureLog(S7LogLevel level, in S7LogEntry entry, Exception? cause)
     {
         _queue.Writer.TryWrite(SideEffect.CreateFailureLog(level, entry, cause));
     }
 
+    /// <summary>
+    /// 投递一条惰性失败日志描述；返回路径不调用日志设施。
+    /// </summary>
+    /// <param name="request">失败日志描述。</param>
+    internal void PostFailureLog(in FailureLogRequest request)
+    {
+        _queue.Writer.TryWrite(SideEffect.CreateFailureLog(in request));
+    }
+
+    /// <summary>
+    /// 完成队列并尽力在指定时间内排空。
+    /// </summary>
+    /// <param name="flushTimeout">排空上限。</param>
+    /// <returns>排空任务。</returns>
     internal async Task CompleteAsync(TimeSpan flushTimeout)
     {
         _queue.Writer.TryComplete();
@@ -70,7 +107,15 @@ internal sealed class SideEffectPump
                     case SideEffectKind.Notification:
                         try
                         {
-                            _dispatchNotification(sideEffect.Notification!);
+                            var args = new S7SessionStateChangedEventArgs
+                            {
+                                PreviousState = sideEffect.PreviousState,
+                                CurrentState = sideEffect.CurrentState,
+                                SessionId = sideEffect.SessionId,
+                                Timestamp = _timeProvider.GetUtcNow()
+                            };
+
+                            _dispatchNotification(args);
                         }
                         catch (Exception)
                         {
@@ -81,8 +126,37 @@ internal sealed class SideEffectPump
                     case SideEffectKind.FailureLog:
                         try
                         {
+                            if (!_logger.IsEnabled(sideEffect.Level))
+                            {
+                                break;
+                            }
+
                             S7LogEntry entry = sideEffect.Entry;
                             _logger.Log(sideEffect.Level, in entry, sideEffect.Cause);
+                        }
+                        catch (Exception)
+                        {
+                        }
+
+                        break;
+
+                    case SideEffectKind.RequestedFailureLog:
+                        try
+                        {
+                            if (!_logger.IsEnabled(sideEffect.Request.Level))
+                            {
+                                break;
+                            }
+
+                            FailureLogRequest request = sideEffect.Request;
+                            S7LogEntry entry = request.ToEntry();
+                            Exception? cause = request.Cause;
+                            if (cause is null && request.Reason is not null)
+                            {
+                                cause = new ReconnectDecisionInfo(request.Reason, request.JudgmentElapsed);
+                            }
+
+                            _logger.Log(request.Level, in entry, cause);
                         }
                         catch (Exception)
                         {
@@ -100,28 +174,39 @@ internal sealed class SideEffectPump
     private enum SideEffectKind
     {
         Notification,
-        FailureLog
+        FailureLog,
+        RequestedFailureLog
     }
 
     private readonly struct SideEffect
     {
         private SideEffect(
             SideEffectKind kind,
-            S7SessionStateChangedEventArgs? notification,
+            S7SessionState previousState,
+            S7SessionState currentState,
+            Guid sessionId,
             S7LogLevel level,
             S7LogEntry entry,
-            Exception? cause)
+            Exception? cause,
+            FailureLogRequest request)
         {
             Kind = kind;
-            Notification = notification;
+            PreviousState = previousState;
+            CurrentState = currentState;
+            SessionId = sessionId;
             Level = level;
             Entry = entry;
             Cause = cause;
+            Request = request;
         }
 
         internal SideEffectKind Kind { get; }
 
-        internal S7SessionStateChangedEventArgs? Notification { get; }
+        internal S7SessionState PreviousState { get; }
+
+        internal S7SessionState CurrentState { get; }
+
+        internal Guid SessionId { get; }
 
         internal S7LogLevel Level { get; }
 
@@ -129,14 +214,48 @@ internal sealed class SideEffectPump
 
         internal Exception? Cause { get; }
 
-        internal static SideEffect CreateNotification(S7SessionStateChangedEventArgs args)
+        internal FailureLogRequest Request { get; }
+
+        internal static SideEffect CreateNotification(
+            S7SessionState previous,
+            S7SessionState current,
+            Guid sessionId)
         {
-            return new SideEffect(SideEffectKind.Notification, args, default, default, null);
+            return new SideEffect(
+                SideEffectKind.Notification,
+                previous,
+                current,
+                sessionId,
+                default,
+                default,
+                null,
+                default);
         }
 
         internal static SideEffect CreateFailureLog(S7LogLevel level, in S7LogEntry entry, Exception? cause)
         {
-            return new SideEffect(SideEffectKind.FailureLog, null, level, entry, cause);
+            return new SideEffect(
+                SideEffectKind.FailureLog,
+                default,
+                default,
+                Guid.Empty,
+                level,
+                entry,
+                cause,
+                default);
+        }
+
+        internal static SideEffect CreateFailureLog(in FailureLogRequest request)
+        {
+            return new SideEffect(
+                SideEffectKind.RequestedFailureLog,
+                default,
+                default,
+                Guid.Empty,
+                request.Level,
+                default,
+                null,
+                request);
         }
     }
 }

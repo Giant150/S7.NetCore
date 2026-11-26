@@ -10,9 +10,17 @@ internal sealed class TestLogger : IS7Logger
 
     public List<(S7LogLevel Level, S7LogEntry Entry)> Records { get; } = [];
 
+    public List<Exception?> Causes { get; } = [];
+
     public bool ThrowOnUse { get; set; }
 
     public TimeSpan LogDelay { get; set; }
+
+    public TimeSpan IsEnabledDelay { get; set; }
+
+    public bool IsEnabledThrows { get; set; }
+
+    public bool LogThrows { get; set; }
 
     public S7LogEntry[] SnapshotEntries()
     {
@@ -22,9 +30,22 @@ internal sealed class TestLogger : IS7Logger
         }
     }
 
+    public Exception?[] SnapshotCauses()
+    {
+        lock (_sync)
+        {
+            return Causes.ToArray();
+        }
+    }
+
     public bool IsEnabled(S7LogLevel level)
     {
-        if (ThrowOnUse)
+        if (IsEnabledDelay > TimeSpan.Zero)
+        {
+            Thread.Sleep(IsEnabledDelay);
+        }
+
+        if (ThrowOnUse || IsEnabledThrows)
         {
             throw new InvalidOperationException("logger failure");
         }
@@ -34,20 +55,21 @@ internal sealed class TestLogger : IS7Logger
 
     public void Log(S7LogLevel level, in S7LogEntry entry, Exception? exception = null)
     {
-        if (ThrowOnUse)
-        {
-            throw new InvalidOperationException("logger failure");
-        }
-
         if (LogDelay > TimeSpan.Zero)
         {
             Thread.Sleep(LogDelay);
+        }
+
+        if (ThrowOnUse || LogThrows)
+        {
+            throw new InvalidOperationException("logger failure");
         }
 
         lock (_sync)
         {
             Entries.Add(entry);
             Records.Add((level, entry));
+            Causes.Add(exception);
         }
     }
 }

@@ -67,19 +67,23 @@ internal sealed partial class S7Session
                 cancellationToken)
             .ConfigureAwait(false);
         await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
+        ITcpTransport transport = _transport!;
+        await DrainPendingAsync(transport, Volatile.Read(ref _connectionEpoch), cancellationToken)
+            .ConfigureAwait(false);
         ThrowIfCannotSend(S7OperationStage.Read, cancellationToken);
         BatchCapacityCalculator.ValidateRead(items, NegotiatedPduSize);
 
         var scope = new OperationScope();
-        ITcpTransport transport = _transport!;
         using var timeout = new OperationTimeout(_options.ReadTimeout, cancellationToken, _timeProvider);
         ushort pduReference = _references.Next();
         byte[] frame = S7BatchRequestBuilder.BuildReadRequest(items, pduReference);
 
+        bool requestIssued = false;
         try
         {
             TraceFrame("Read", S7OperationStage.Read, frame);
             await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
+            requestIssued = true;
             byte[] payload = await S7FrameReader
                 .ReadS7PayloadAsync(transport, S7OperationStage.Read, timeout.Token)
                 .ConfigureAwait(false);
@@ -90,13 +94,10 @@ internal sealed partial class S7Session
         }
         catch (OperationCanceledException ex)
         {
-            if (timeout.CallerTriggered)
+            long judgedAt = Stopwatch.GetTimestamp();
+            if (requestIssued)
             {
-                bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Read).ConfigureAwait(false);
-                if (!drained)
-                {
-                    await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-                }
+                PostAftercare(transport, pduReference, S7OperationStage.Read);
             }
 
             S7ClientException mapped = MapCanceled(
@@ -105,7 +106,18 @@ internal sealed partial class S7Session
                 S7ErrorCode.ReadTimeout,
                 DescribeBatch("读取", items),
                 ex);
-            LogBatchFailure(scope, "Read", S7OperationStage.Read, items, mapped);
+            LogBatchFailure(
+                scope,
+                "Read",
+                S7OperationStage.Read,
+                items,
+                mapped,
+                CreateCancelDecision(
+                    timeout,
+                    requestIssued,
+                    Stopwatch.GetElapsedTime(judgedAt),
+                    DescribeBatch("读取", items)),
+                requestIssued);
             throw mapped;
         }
         catch (TransportException ex)
@@ -126,7 +138,12 @@ internal sealed partial class S7Session
                 S7OperationStage.Read,
                 items,
                 mapped,
-                CreateFaultDecision(reconnectStarted, faultElapsed, mapped));
+                CreateFaultDecision(
+                    reconnectStarted,
+                    faultElapsed,
+                    mapped,
+                    aftercare: DescribeFaultAftercare(reconnectStarted)),
+                requestIssued);
             throw mapped;
         }
         catch (S7ClientException ex)
@@ -147,11 +164,13 @@ internal sealed partial class S7Session
                 cancellationToken)
             .ConfigureAwait(false);
         await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
+        ITcpTransport transport = _transport!;
+        await DrainPendingAsync(transport, Volatile.Read(ref _connectionEpoch), cancellationToken)
+            .ConfigureAwait(false);
         ThrowIfCannotSend(S7OperationStage.Write, cancellationToken);
         BatchCapacityCalculator.ValidateWrite(items, NegotiatedPduSize);
 
         var scope = new OperationScope();
-        ITcpTransport transport = _transport!;
         using var timeout = new OperationTimeout(_options.WriteTimeout, cancellationToken, _timeProvider);
         ushort pduReference = _references.Next();
         byte[] frame = S7BatchRequestBuilder.BuildWriteRequest(items, pduReference);
@@ -172,13 +191,10 @@ internal sealed partial class S7Session
         }
         catch (OperationCanceledException ex)
         {
-            if (timeout.CallerTriggered)
+            long judgedAt = Stopwatch.GetTimestamp();
+            if (writeIssued)
             {
-                bool drained = await DrainAsync(transport, pduReference, S7OperationStage.Write).ConfigureAwait(false);
-                if (!drained)
-                {
-                    await CloseTransportAfterFaultAsync(transport).ConfigureAwait(false);
-                }
+                PostAftercare(transport, pduReference, S7OperationStage.Write);
             }
 
             S7ClientException mapped = MapCanceled(
@@ -188,7 +204,19 @@ internal sealed partial class S7Session
                 DescribeBatch("写入", items),
                 ex,
                 writeOutcomeUncertain: writeIssued);
-            LogBatchFailure(scope, "Write", S7OperationStage.Write, items, mapped);
+            LogBatchFailure(
+                scope,
+                "Write",
+                S7OperationStage.Write,
+                items,
+                mapped,
+                CreateCancelDecision(
+                    timeout,
+                    writeIssued,
+                    Stopwatch.GetElapsedTime(judgedAt),
+                    DescribeBatch("写入", items),
+                    writeOutcomeUncertain: writeIssued),
+                writeIssued);
             throw mapped;
         }
         catch (TransportException ex)
@@ -210,7 +238,13 @@ internal sealed partial class S7Session
                 S7OperationStage.Write,
                 items,
                 mapped,
-                CreateFaultDecision(reconnectStarted, faultElapsed, mapped, writeOutcomeUncertain: writeIssued));
+                CreateFaultDecision(
+                    reconnectStarted,
+                    faultElapsed,
+                    mapped,
+                    writeOutcomeUncertain: writeIssued,
+                    aftercare: DescribeFaultAftercare(reconnectStarted)),
+                writeIssued);
             throw mapped;
         }
         catch (S7ClientException ex)
@@ -260,19 +294,39 @@ internal sealed partial class S7Session
         S7OperationStage stage,
         IReadOnlyList<BatchWireItem> items,
         S7ClientException exception,
-        Exception? cause = null)
+        Exception? cause = null,
+        bool requestIssued = false)
     {
-        LogBatch(
-            scope,
-            operation,
-            stage,
-            succeeded: false,
-            items.Count,
-            succeededItemCount: 0,
-            failedItemCount: items.Count,
-            TotalBytes(items),
-            exception.ErrorCode,
-            cause ?? exception);
+        int sentFrames = requestIssued ? 1 : 0;
+        string summary = $"条目总数 {items.Count}；已发送 {sentFrames} 帧；未发送 {1 - sentFrames} 帧；"
+            + $"写入结果不确定 {exception.WriteOutcomeUncertain}";
+        string reason = cause is ReconnectDecisionInfo decision
+            ? $"{decision.Reason}；{summary}"
+            : summary;
+
+        var logCause = new ReconnectDecisionInfo(
+            reason,
+            cause is ReconnectDecisionInfo decisionInfo ? decisionInfo.Elapsed : TimeSpan.Zero,
+            exception.BytesWritten,
+            exception.WriteOutcomeUncertain);
+
+        var request = new FailureLogRequest
+        {
+            Level = S7LogLevel.Warning,
+            Operation = operation,
+            Stage = stage,
+            ItemCount = items.Count,
+            SucceededItemCount = 0,
+            FailedItemCount = items.Count,
+            TotalDataBytes = TotalBytes(items),
+            Elapsed = scope.Elapsed,
+            ErrorCode = exception.ErrorCode,
+            PlcReturnCode = exception.PlcReturnCode,
+            Reason = reason,
+            Cause = logCause
+        };
+
+        PostFailureLog(in request);
     }
 
     private void LogBatchItemFailure(
@@ -284,14 +338,9 @@ internal sealed partial class S7Session
         S7ErrorCode errorCode,
         byte? plcReturnCode)
     {
-        if (!_logger.IsEnabled(S7LogLevel.Warning))
+        var request = new FailureLogRequest
         {
-            return;
-        }
-
-        var entry = new S7LogEntry
-        {
-            Timestamp = DateTimeOffset.UtcNow,
+            Level = S7LogLevel.Warning,
             Operation = operation,
             Stage = stage,
             Area = item.Area,
@@ -302,9 +351,10 @@ internal sealed partial class S7Session
             ErrorCode = errorCode,
             PlcReturnCode = plcReturnCode,
             Elapsed = scope.Elapsed,
-            Succeeded = false
+            Reason = "批量条目失败"
         };
-        _sideEffects.PostFailureLog(S7LogLevel.Warning, in entry, null);
+
+        PostFailureLog(in request);
     }
 
     private void LogBatch(
@@ -320,14 +370,34 @@ internal sealed partial class S7Session
         Exception? exception = null)
     {
         S7LogLevel level = succeeded ? S7LogLevel.Information : S7LogLevel.Warning;
-        if (!_logger.IsEnabled(level))
+
+        if (succeeded)
         {
+            if (!_logger.IsEnabled(level))
+            {
+                return;
+            }
+
+            var entry = new S7LogEntry
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Operation = operation,
+                Stage = stage,
+                ItemCount = itemCount,
+                SucceededItemCount = succeededItemCount,
+                FailedItemCount = failedItemCount,
+                TotalDataBytes = totalDataBytes,
+                Elapsed = scope.Elapsed,
+                Succeeded = true,
+                ErrorCode = errorCode
+            };
+            _logger.Log(level, in entry, exception);
             return;
         }
 
-        var entry = new S7LogEntry
+        var request = new FailureLogRequest
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Level = S7LogLevel.Warning,
             Operation = operation,
             Stage = stage,
             ItemCount = itemCount,
@@ -335,17 +405,11 @@ internal sealed partial class S7Session
             FailedItemCount = failedItemCount,
             TotalDataBytes = totalDataBytes,
             Elapsed = scope.Elapsed,
-            Succeeded = succeeded,
-            ErrorCode = errorCode
+            ErrorCode = errorCode,
+            Cause = exception
         };
-        if (succeeded)
-        {
-            _logger.Log(level, in entry, exception);
-        }
-        else
-        {
-            _sideEffects.PostFailureLog(level, in entry, exception);
-        }
+
+        PostFailureLog(in request);
     }
 
     private static int TotalBytes(IReadOnlyList<BatchWireItem> items)

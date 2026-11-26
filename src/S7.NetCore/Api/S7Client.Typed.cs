@@ -272,14 +272,39 @@ public sealed partial class S7Client
         int? capacity = null)
     {
         S7LogLevel level = succeeded ? S7LogLevel.Information : S7LogLevel.Warning;
-        if (!_logger.IsEnabled(level))
+
+        if (succeeded)
         {
+            if (!_logger.IsEnabled(level))
+            {
+                return;
+            }
+
+            var entry = new S7LogEntry
+            {
+                Timestamp = DateTimeOffset.UtcNow,
+                Operation = operation,
+                Stage = stage,
+                Area = address.Area,
+                DbNumber = address.DbNumber,
+                StartByte = address.StartByte,
+                Length = bytesOccupied,
+                Elapsed = Stopwatch.GetElapsedTime(startTimestamp),
+                Succeeded = true,
+                ErrorCode = errorCode,
+                PlcReturnCode = plcReturnCode,
+                AddressExpression = address.Expression,
+                DataType = dataType,
+                BytesOccupied = bytesOccupied,
+                Capacity = capacity
+            };
+            _logger.Log(level, in entry, exception);
             return;
         }
 
-        var entry = new S7LogEntry
+        var request = new FailureLogRequest
         {
-            Timestamp = DateTimeOffset.UtcNow,
+            Level = S7LogLevel.Warning,
             Operation = operation,
             Stage = stage,
             Area = address.Area,
@@ -287,22 +312,15 @@ public sealed partial class S7Client
             StartByte = address.StartByte,
             Length = bytesOccupied,
             Elapsed = Stopwatch.GetElapsedTime(startTimestamp),
-            Succeeded = succeeded,
             ErrorCode = errorCode,
             PlcReturnCode = plcReturnCode,
             AddressExpression = address.Expression,
             DataType = dataType,
             BytesOccupied = bytesOccupied,
-            Capacity = capacity
+            Capacity = capacity,
+            Cause = exception
         };
 
-        if (succeeded)
-        {
-            _logger.Log(level, in entry, exception);
-        }
-        else
-        {
-            _session.PostFailureLog(level, in entry, exception);
-        }
+        _session.PostFailureLog(in request);
     }
 }

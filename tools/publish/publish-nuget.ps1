@@ -10,9 +10,9 @@
 .EXAMPLE
   $env:NUGET_API_KEY = '<your-api-key>'
   pwsh -File tools/publish/publish-nuget.ps1
-  pwsh -File tools/publish/publish-nuget.ps1 -Version v5.1.0
+  pwsh -File tools/publish/publish-nuget.ps1 -Version v5.2.0
   pwsh -File tools/publish/publish-nuget.ps1 -PackOnly
-  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 5.1.0
+  pwsh -File tools/publish/publish-nuget.ps1 -SkipBuild -Version 5.2.0
 
 .NOTES
   版本：-Version 优先；否则读取 Directory.Build.props 的 VersionPrefix，仅去掉 v/V 前缀。
