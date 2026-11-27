@@ -67,7 +67,8 @@ public sealed partial class S7Client
                     bytesOccupied: 1,
                     succeeded: true,
                     startTimestamp,
-                    capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
+                    capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity),
+                    value: boolValue);
 
                 return new S7TypedReadResult(boolValue, 1, address)
                 {
@@ -92,7 +93,8 @@ public sealed partial class S7Client
                 validation.BytesOccupied,
                 succeeded: true,
                 startTimestamp,
-                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
+                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity),
+                value: decoded);
 
             return new S7TypedReadResult(decoded, validation.BytesOccupied, address)
             {
@@ -156,7 +158,9 @@ public sealed partial class S7Client
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(request.DataType, effectiveCapacity));
+                CapacityForLog(request.DataType, effectiveCapacity),
+                value: request.Value,
+                valueState: S7ValueState.NotSent);
             throw;
         }
 
@@ -192,7 +196,8 @@ public sealed partial class S7Client
                 validation.BytesOccupied,
                 succeeded: true,
                 startTimestamp,
-                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity));
+                capacity: CapacityForLog(validation.DataType, validation.EffectiveCapacity),
+                value: request.Value);
 
             return written;
         }
@@ -209,7 +214,9 @@ public sealed partial class S7Client
                 exception.ErrorCode,
                 exception.PlcReturnCode,
                 exception,
-                CapacityForLog(validation.DataType, validation.EffectiveCapacity));
+                CapacityForLog(validation.DataType, validation.EffectiveCapacity),
+                value: request.Value,
+                valueState: S7Session.ResolveWriteValueState(exception));
 
             throw exception.WithContext(BuildContext(address, validation));
         }
@@ -269,7 +276,9 @@ public sealed partial class S7Client
         S7ErrorCode? errorCode = null,
         byte? plcReturnCode = null,
         Exception? exception = null,
-        int? capacity = null)
+        int? capacity = null,
+        S7Value? value = null,
+        S7ValueState valueState = S7ValueState.None)
     {
         S7LogLevel level = succeeded ? S7LogLevel.Information : S7LogLevel.Warning;
 
@@ -280,6 +289,10 @@ public sealed partial class S7Client
                 return;
             }
 
+            S7ValueText valueText = value is { } typedValue
+                && S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace)
+                ? S7ValueFormatter.FormatTyped(dataType, in typedValue)
+                : S7ValueText.None;
             var entry = new S7LogEntry
             {
                 Timestamp = DateTimeOffset.UtcNow,
@@ -296,7 +309,12 @@ public sealed partial class S7Client
                 AddressExpression = address.Expression,
                 DataType = dataType,
                 BytesOccupied = bytesOccupied,
-                Capacity = capacity
+                Capacity = capacity,
+                ValueText = valueText.Text,
+                ValueFormat = valueText.Format,
+                ValueState = valueText.Text is null ? S7ValueState.None : S7ValueState.Confirmed,
+                ValueTruncated = valueText.Truncated,
+                ValueItemCount = valueText.ItemCount
             };
             _logger.Log(level, in entry, exception);
             return;
@@ -318,7 +336,10 @@ public sealed partial class S7Client
             DataType = dataType,
             BytesOccupied = bytesOccupied,
             Capacity = capacity,
-            Cause = exception
+            Cause = exception,
+            TypedValue = value,
+            ValueTraceEnabled = _options.EnableValueTrace,
+            ValueState = valueState
         };
 
         _session.PostFailureLog(in request);

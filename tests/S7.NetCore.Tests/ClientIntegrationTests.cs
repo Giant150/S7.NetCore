@@ -385,7 +385,10 @@ public sealed class ClientIntegrationTests
         var logger = new TestLogger();
         var transport = new FakeTcpTransport();
         FillMemory(transport.Memory, 64);
-        await using S7Client client = new(CreateOptions(), logger, transport);
+        await using S7Client client = new(
+            CreateOptions() with { EnableValueTrace = false },
+            logger,
+            transport);
 
         await client.ConnectAsync();
         _ = await client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 8));
@@ -393,6 +396,7 @@ public sealed class ClientIntegrationTests
 
         Assert.NotEmpty(logger.Entries);
         Assert.All(logger.Entries, entry => Assert.Null(entry.ProtocolTrace));
+        Assert.All(logger.Entries, entry => Assert.Null(entry.ValueText));
         Assert.All(logger.Entries, entry => Assert.DoesNotContain("DEAD", entry.Operation, StringComparison.OrdinalIgnoreCase));
     }
 

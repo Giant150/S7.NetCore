@@ -239,11 +239,15 @@ internal sealed partial class S7Session : IAsyncDisposable
                 bool requestIssued = false;
                 try
                 {
-                    TraceFrame("Read", S7OperationStage.Read, frame);
+                    TraceFrame("Read", S7OperationStage.Read, frame, S7ProtocolTraceDirection.Tx);
                     await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
                     requestIssued = true;
                     byte[] payload = await S7FrameReader
-                        .ReadS7PayloadAsync(transport, S7OperationStage.Read, timeout.Token)
+                        .ReadS7PayloadAsync(
+                            transport,
+                            S7OperationStage.Read,
+                            timeout.Token,
+                            CreateFrameObserver("Read", S7OperationStage.Read))
                         .ConfigureAwait(false);
 
                     ReadResponseInfo info = S7ResponseParser.ParseReadResponse(payload, pduReference, chunkLength);
@@ -343,6 +347,12 @@ internal sealed partial class S7Session : IAsyncDisposable
 
             var result = new byte[totalLength];
             buffer.AsSpan(0, totalLength).CopyTo(result);
+            S7ValueText value = S7LogGate.ShouldWriteValue(
+                    _logger,
+                    S7LogLevel.Information,
+                    _options.EnableValueTrace)
+                ? S7ValueFormatter.FormatHex(result)
+                : S7ValueText.None;
             Log(
                 scope,
                 "Read",
@@ -352,7 +362,8 @@ internal sealed partial class S7Session : IAsyncDisposable
                 request.DbNumber,
                 request.StartByte,
                 totalLength,
-                chunkCount: chunkCount);
+                chunkCount: chunkCount,
+                value: value);
             return result;
         }
         finally
@@ -402,11 +413,15 @@ internal sealed partial class S7Session : IAsyncDisposable
 
         try
         {
-            TraceFrame("Write", S7OperationStage.Write, frame);
+            TraceFrame("Write", S7OperationStage.Write, frame, S7ProtocolTraceDirection.Tx);
             await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
             writeIssued = true;
             byte[] payload = await S7FrameReader
-                .ReadS7PayloadAsync(transport, S7OperationStage.Write, timeout.Token)
+                .ReadS7PayloadAsync(
+                    transport,
+                    S7OperationStage.Write,
+                    timeout.Token,
+                    CreateFrameObserver("Write", S7OperationStage.Write))
                 .ConfigureAwait(false);
 
             WriteResponseInfo info = S7ResponseParser.ParseWriteResponse(payload, pduReference);
@@ -432,6 +447,12 @@ internal sealed partial class S7Session : IAsyncDisposable
                 length: 1,
                 chunkIndex: 1,
                 chunkCount: 1);
+            S7ValueText bitValueText = S7LogGate.ShouldWriteValue(
+                    _logger,
+                    S7LogLevel.Information,
+                    _options.EnableValueTrace)
+                ? S7ValueFormatter.FormatTyped(S7DataType.Bool, S7Value.FromBool(value))
+                : S7ValueText.None;
             Log(
                 scope,
                 "Write",
@@ -441,7 +462,8 @@ internal sealed partial class S7Session : IAsyncDisposable
                 request.DbNumber,
                 request.StartByte,
                 length: 1,
-                chunkCount: 1);
+                chunkCount: 1,
+                value: bitValueText);
             return 1;
         }
         catch (OperationCanceledException ex)
@@ -476,7 +498,10 @@ internal sealed partial class S7Session : IAsyncDisposable
                     writeIssued,
                     Stopwatch.GetElapsedTime(judgedAt),
                     DescribeWriteChunk(request, request.StartByte, 1),
-                    writeOutcomeUncertain: uncertain));
+                    writeOutcomeUncertain: uncertain),
+                typedValue: S7Value.FromBool(value),
+                valueTraceEnabled: _options.EnableValueTrace,
+                valueState: ResolveWriteValueState(mapped));
             throw mapped;
         }
         catch (TransportException ex)
@@ -508,7 +533,10 @@ internal sealed partial class S7Session : IAsyncDisposable
                             faultElapsed,
                             mapped,
                             writeOutcomeUncertain: writeIssued,
-                            aftercare: DescribeFaultAftercare(reconnectStarted)));
+                            aftercare: DescribeFaultAftercare(reconnectStarted)),
+                typedValue: S7Value.FromBool(value),
+                valueTraceEnabled: _options.EnableValueTrace,
+                valueState: ResolveWriteValueState(mapped));
             throw mapped;
         }
         catch (S7ClientException ex)
@@ -521,7 +549,10 @@ internal sealed partial class S7Session : IAsyncDisposable
                 request.Area,
                 request.DbNumber,
                 request.StartByte,
-                length: 1);
+                length: 1,
+                typedValue: S7Value.FromBool(value),
+                valueTraceEnabled: _options.EnableValueTrace,
+                valueState: ResolveWriteValueState(ex));
             throw;
         }
     }
@@ -579,11 +610,15 @@ internal sealed partial class S7Session : IAsyncDisposable
 
             try
             {
-                TraceFrame("Write", S7OperationStage.Write, frame);
+                TraceFrame("Write", S7OperationStage.Write, frame, S7ProtocolTraceDirection.Tx);
                 await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
                 writeIssued = true;
                 byte[] payload = await S7FrameReader
-                    .ReadS7PayloadAsync(transport, S7OperationStage.Write, timeout.Token)
+                    .ReadS7PayloadAsync(
+                        transport,
+                        S7OperationStage.Write,
+                        timeout.Token,
+                        CreateFrameObserver("Write", S7OperationStage.Write))
                     .ConfigureAwait(false);
 
                 WriteResponseInfo info = S7ResponseParser.ParseWriteResponse(payload, pduReference);
@@ -653,7 +688,10 @@ internal sealed partial class S7Session : IAsyncDisposable
                         Stopwatch.GetElapsedTime(judgedAt),
                         DescribeWriteChunk(request, chunkStart, chunkLength),
                         bytesWritten: offset,
-                        writeOutcomeUncertain: uncertain));
+                        writeOutcomeUncertain: uncertain),
+                    valueBytes: request.Data,
+                    valueTraceEnabled: _options.EnableValueTrace,
+                    valueState: ResolveWriteValueState(mapped));
                 throw mapped;
             }
             catch (TransportException ex)
@@ -691,7 +729,10 @@ internal sealed partial class S7Session : IAsyncDisposable
                         mapped,
                         offset,
                         uncertain,
-                        DescribeFaultAftercare(reconnectStarted)));
+                        DescribeFaultAftercare(reconnectStarted)),
+                    valueBytes: request.Data,
+                    valueTraceEnabled: _options.EnableValueTrace,
+                    valueState: ResolveWriteValueState(mapped));
                 throw mapped;
             }
             catch (S7ClientException ex)
@@ -704,11 +745,20 @@ internal sealed partial class S7Session : IAsyncDisposable
                     request.Area,
                     request.DbNumber,
                     chunkStart,
-                    chunkLength);
+                    chunkLength,
+                    valueBytes: request.Data,
+                    valueTraceEnabled: _options.EnableValueTrace,
+                    valueState: ResolveWriteValueState(ex));
                 throw;
             }
         }
 
+        S7ValueText value = S7LogGate.ShouldWriteValue(
+                _logger,
+                S7LogLevel.Information,
+                _options.EnableValueTrace)
+            ? S7ValueFormatter.FormatHex(request.Data.Span)
+            : S7ValueText.None;
         Log(
             scope,
             "Write",
@@ -718,7 +768,8 @@ internal sealed partial class S7Session : IAsyncDisposable
             request.DbNumber,
             request.StartByte,
             totalLength,
-            chunkCount: chunkCount);
+            chunkCount: chunkCount,
+            value: value);
         return offset;
     }
 
@@ -826,11 +877,12 @@ internal sealed partial class S7Session : IAsyncDisposable
             stage = S7OperationStage.CotpConnect;
             (Tsap local, Tsap remote) = TsapResolver.Resolve(_options);
             byte[] connectionRequest = CotpCodec.BuildConnectionRequest(local, remote, stage);
-            TraceFrame("Connect", stage, connectionRequest);
+            TraceFrame("Connect", stage, connectionRequest, S7ProtocolTraceDirection.Tx);
             await transport.WriteAsync(connectionRequest, timeout.Token).ConfigureAwait(false);
 
             byte[] connectionConfirm = await S7FrameReader.ReadFrameAsync(transport, stage, timeout.Token)
                 .ConfigureAwait(false);
+            TraceFrame("Connect", stage, connectionConfirm, S7ProtocolTraceDirection.Rx);
 
             if (!CotpCodec.IsConnectionConfirm(connectionConfirm, stage))
             {
@@ -844,10 +896,11 @@ internal sealed partial class S7Session : IAsyncDisposable
             stage = S7OperationStage.S7Setup;
             ushort pduReference = _references.Next();
             byte[] setupRequest = S7RequestBuilder.BuildSetupCommunication(_options.RequestedPduSize, pduReference);
-            TraceFrame("Connect", stage, setupRequest);
+            TraceFrame("Connect", stage, setupRequest, S7ProtocolTraceDirection.Tx);
             await transport.WriteAsync(setupRequest, timeout.Token).ConfigureAwait(false);
 
-            byte[] setupResponse = await S7FrameReader.ReadS7PayloadAsync(transport, stage, timeout.Token)
+            byte[] setupResponse = await S7FrameReader
+                .ReadS7PayloadAsync(transport, stage, timeout.Token, CreateFrameObserver("Connect", stage))
                 .ConfigureAwait(false);
             int confirmedPduSize = S7ResponseParser.ParseSetupResponse(setupResponse, pduReference);
             return PduSizeNegotiator.Negotiate(_options.RequestedPduSize, confirmedPduSize);
@@ -1856,9 +1909,13 @@ internal sealed partial class S7Session : IAsyncDisposable
         return $"区域 {request.Area}，DB {request.DbNumber}，起始 {startByte}，长度 {length}";
     }
 
-    private void TraceFrame(string operation, S7OperationStage stage, ReadOnlySpan<byte> frame)
+    private void TraceFrame(
+        string operation,
+        S7OperationStage stage,
+        ReadOnlySpan<byte> frame,
+        S7ProtocolTraceDirection direction)
     {
-        if (!_options.EnableProtocolTrace || !_logger.IsEnabled(S7LogLevel.Trace))
+        if (!S7LogGate.ShouldTraceProtocol(_logger, _options.EnableProtocolTrace))
         {
             return;
         }
@@ -1868,7 +1925,19 @@ internal sealed partial class S7Session : IAsyncDisposable
             operation,
             stage,
             succeeded: true,
-            protocolTrace: Convert.ToHexString(frame));
+            protocolTrace: Convert.ToHexString(frame),
+            protocolTraceDirection: direction,
+            protocolTraceBytes: frame.Length);
+    }
+
+    private Action<ReadOnlyMemory<byte>>? CreateFrameObserver(string operation, S7OperationStage stage)
+    {
+        if (!S7LogGate.ShouldTraceProtocol(_logger, _options.EnableProtocolTrace))
+        {
+            return null;
+        }
+
+        return frame => TraceFrame(operation, stage, frame.Span, S7ProtocolTraceDirection.Rx);
     }
 
     private void LogChunk(
@@ -1915,7 +1984,11 @@ internal sealed partial class S7Session : IAsyncDisposable
         int? startByte = null,
         int? length = null,
         Exception? cause = null,
-        TimeSpan? judgmentElapsed = null)
+        TimeSpan? judgmentElapsed = null,
+        ReadOnlyMemory<byte> valueBytes = default,
+        S7Value? typedValue = null,
+        bool valueTraceEnabled = false,
+        S7ValueState valueState = S7ValueState.None)
     {
         Exception? logCause = cause;
         if (logCause is null && exception.InnerException is ReconnectDecisionInfo decision)
@@ -1938,10 +2011,34 @@ internal sealed partial class S7Session : IAsyncDisposable
             ErrorCode = exception.ErrorCode,
             PlcReturnCode = exception.PlcReturnCode,
             JudgmentElapsed = judgmentElapsed ?? TimeSpan.Zero,
-            Cause = logCause
+            Cause = logCause,
+            ValueBytes = valueBytes,
+            TypedValue = typedValue,
+            ValueTraceEnabled = valueTraceEnabled,
+            ValueState = valueState
         };
 
         PostFailureLog(in request);
+    }
+
+    internal static S7ValueState ResolveWriteValueState(S7ClientException exception)
+    {
+        if (exception.WriteOutcomeUncertain || exception.BytesWritten > 0)
+        {
+            return S7ValueState.Uncertain;
+        }
+
+        if (exception.Stage == S7OperationStage.Validate)
+        {
+            return S7ValueState.NotSent;
+        }
+
+        if (exception.Category is S7ErrorCategory.PlcReturn or S7ErrorCategory.Protocol)
+        {
+            return S7ValueState.Uncertain;
+        }
+
+        return S7ValueState.NotSent;
     }
 
     private void LogReconnect(
@@ -1987,7 +2084,10 @@ internal sealed partial class S7Session : IAsyncDisposable
         int? attempt = null,
         TimeSpan? reconnectDelay = null,
         TimeSpan? disconnectedDuration = null,
-        S7LogLevel? level = null)
+        S7LogLevel? level = null,
+        in S7ValueText value = default,
+        S7ProtocolTraceDirection protocolTraceDirection = default,
+        int? protocolTraceBytes = null)
     {
         S7LogLevel effectiveLevel = level
             ?? (protocolTrace is null
@@ -2016,9 +2116,16 @@ internal sealed partial class S7Session : IAsyncDisposable
             PlcReturnCode = plcReturnCode,
             NegotiatedPduSize = negotiatedPduSize,
             ProtocolTrace = protocolTrace,
+            ProtocolTraceDirection = protocolTraceDirection,
+            ProtocolTraceBytes = protocolTraceBytes,
             Attempt = attempt,
             ReconnectDelay = reconnectDelay,
-            DisconnectedDuration = disconnectedDuration
+            DisconnectedDuration = disconnectedDuration,
+            ValueText = value.Text,
+            ValueFormat = value.Format,
+            ValueState = value.Text is null ? S7ValueState.None : S7ValueState.Confirmed,
+            ValueTruncated = value.Truncated,
+            ValueItemCount = value.ItemCount
         };
 
         _logger.Log(effectiveLevel, in entry, exception);

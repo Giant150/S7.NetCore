@@ -149,7 +149,13 @@ internal sealed class SideEffectPump
                             }
 
                             FailureLogRequest request = sideEffect.Request;
-                            S7LogEntry entry = request.ToEntry();
+                            S7ValueText value = S7ValueText.None;
+                            if (request.ValueTraceEnabled && request.ValueState != S7ValueState.None)
+                            {
+                                value = FormatValue(in request);
+                            }
+
+                            S7LogEntry entry = request.ToEntry(in value);
                             Exception? cause = request.Cause;
                             if (cause is null && request.Reason is not null)
                             {
@@ -169,6 +175,23 @@ internal sealed class SideEffectPump
         catch (Exception)
         {
         }
+    }
+
+    private static S7ValueText FormatValue(in FailureLogRequest request)
+    {
+        if (request.TypedValue is { } typed)
+        {
+            return S7ValueFormatter.FormatTyped(request.DataType ?? typed.DataType, in typed);
+        }
+
+        if (request.StructValue is not null)
+        {
+            return request.StructSnapshot is null
+                ? new S7ValueText { FormatFailed = true }
+                : S7ValueFormatter.FormatStruct(request.StructValue, request.StructSnapshot);
+        }
+
+        return S7ValueFormatter.FormatHex(request.ValueBytes.Span);
     }
 
     private enum SideEffectKind

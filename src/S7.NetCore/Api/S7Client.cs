@@ -9,6 +9,7 @@ public sealed partial class S7Client : IAsyncDisposable
 {
     private readonly S7Session _session;
     private readonly IS7Logger _logger;
+    private readonly S7ConnectionOptions _options;
     private EventHandler<S7SessionStateChangedEventArgs>? _sessionStateChanged;
 
     /// <summary>
@@ -30,6 +31,7 @@ public sealed partial class S7Client : IAsyncDisposable
     {
         ArgumentNullException.ThrowIfNull(options);
         OptionsValidator.Validate(options);
+        _options = options;
         _logger = logger is null or NullS7Logger ? NullS7Logger.Instance : new SafeS7Logger(logger);
         _session = new S7Session(options, logger, transport, timeProvider, transportFactory);
         _session.StateChanged += OnSessionStateChanged;

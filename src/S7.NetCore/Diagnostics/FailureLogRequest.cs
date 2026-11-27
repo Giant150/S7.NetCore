@@ -98,6 +98,24 @@ internal readonly struct FailureLogRequest
     /// <summary>条目数超限时的协议上限。</summary>
     internal int? ItemCountLimit { get; init; }
 
+    /// <summary>是否允许在日志中展示值。</summary>
+    internal bool ValueTraceEnabled { get; init; }
+
+    /// <summary>写入请求的完整字节（泵线程格式化 Hex 值文本）。</summary>
+    internal ReadOnlyMemory<byte> ValueBytes { get; init; }
+
+    /// <summary>类型化写入请求值（泵线程格式化 Typed 值文本）。</summary>
+    internal S7Value? TypedValue { get; init; }
+
+    /// <summary>结构体写入请求值（装箱，泵线程格式化 JSON 值文本）。</summary>
+    internal object? StructValue { get; init; }
+
+    /// <summary>结构体布局快照。</summary>
+    internal StructLayoutSnapshot? StructSnapshot { get; init; }
+
+    /// <summary>失败时的值状态。</summary>
+    internal S7ValueState ValueState { get; init; }
+
     /// <summary>判定原因与善后去向。</summary>
     internal string? Reason { get; init; }
 
@@ -110,9 +128,14 @@ internal readonly struct FailureLogRequest
     /// <summary>
     /// 构造结构化日志条目（纯字段操作，不触达日志设施）。
     /// </summary>
+    /// <param name="value">已格式化的值文本；关闭值展示或读取失败时为空。</param>
     /// <returns>日志条目。</returns>
-    internal S7LogEntry ToEntry()
+    internal S7LogEntry ToEntry(in S7ValueText value)
     {
+        S7ValueState entryValueState = !ValueTraceEnabled
+            ? S7ValueState.None
+            : (ValueState == S7ValueState.Confirmed && value.Text is null ? S7ValueState.None : ValueState);
+
         return new S7LogEntry
         {
             Timestamp = DateTimeOffset.UtcNow,
@@ -146,7 +169,12 @@ internal readonly struct FailureLogRequest
             ItemIndex = ItemIndex,
             RequiredBytes = RequiredBytes,
             PduLimit = PduLimit,
-            ItemCountLimit = ItemCountLimit
+            ItemCountLimit = ItemCountLimit,
+            ValueText = value.Text,
+            ValueFormat = value.Format,
+            ValueState = entryValueState,
+            ValueTruncated = value.Truncated,
+            ValueItemCount = value.ItemCount
         };
     }
 }

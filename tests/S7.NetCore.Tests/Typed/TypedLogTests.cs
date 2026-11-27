@@ -10,7 +10,10 @@ public sealed class TypedLogTests
         var logger = new TestLogger();
         var transport = new FakeTcpTransport();
         PrepareWStringMemory(transport.Memory);
-        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await using var client = new S7Client(
+            CreateOptions() with { EnableValueTrace = false },
+            logger,
+            transport);
         await client.ConnectAsync();
 
         S7TypedReadResult result = await client.ReadValueAsync(
@@ -52,7 +55,10 @@ public sealed class TypedLogTests
     {
         var logger = new TestLogger();
         var transport = new FakeTcpTransport();
-        await using var client = new S7Client(CreateOptions(), logger, transport);
+        await using var client = new S7Client(
+            CreateOptions() with { EnableValueTrace = false },
+            logger,
+            transport);
         await client.ConnectAsync();
 
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(

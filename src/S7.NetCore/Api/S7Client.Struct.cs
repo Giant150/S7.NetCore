@@ -68,7 +68,9 @@ public sealed partial class S7Client
                 snapshot.FieldCount,
                 succeeded: true,
                 startTimestamp: startTimestamp,
-                parsed: parsed);
+                parsed: parsed,
+                value: value,
+                snapshot: snapshot);
 
             return new S7StructReadResult<T>(
                 value,
@@ -133,7 +135,9 @@ public sealed partial class S7Client
                 succeeded: false,
                 startTimestamp: startTimestamp,
                 errorCode: exception.ErrorCode,
-                exception: exception);
+                exception: exception,
+                value: value,
+                valueState: S7ValueState.NotSent);
             throw;
         }
 
@@ -155,7 +159,10 @@ public sealed partial class S7Client
                 startTimestamp: startTimestamp,
                 errorCode: exception.ErrorCode,
                 exception: exception,
-                parsed: parsed);
+                parsed: parsed,
+                value: value,
+                snapshot: snapshot,
+                valueState: S7ValueState.NotSent);
             throw exception.WithContext(StructContext(typeof(T), parsed, snapshot.TotalLength));
         }
 
@@ -175,7 +182,9 @@ public sealed partial class S7Client
                 snapshot.FieldCount,
                 succeeded: true,
                 startTimestamp: startTimestamp,
-                parsed: parsed);
+                parsed: parsed,
+                value: value,
+                snapshot: snapshot);
 
             return written;
         }
@@ -192,7 +201,10 @@ public sealed partial class S7Client
                 startTimestamp: startTimestamp,
                 errorCode: exception.ErrorCode,
                 exception: exception,
-                parsed: parsed);
+                parsed: parsed,
+                value: value,
+                snapshot: snapshot,
+                valueState: S7Session.ResolveWriteValueState(exception));
             throw exception.WithContext(StructContext(typeof(T), parsed, snapshot.TotalLength));
         }
     }
@@ -208,7 +220,10 @@ public sealed partial class S7Client
         long startTimestamp,
         S7ErrorCode? errorCode = null,
         Exception? exception = null,
-        S7Address? parsed = null)
+        S7Address? parsed = null,
+        object? value = null,
+        StructLayoutSnapshot? snapshot = null,
+        S7ValueState valueState = S7ValueState.None)
     {
         S7LogLevel level = succeeded ? S7LogLevel.Information : S7LogLevel.Warning;
 
@@ -219,6 +234,10 @@ public sealed partial class S7Client
                 return;
             }
 
+            S7ValueText valueText = value is not null && snapshot is not null
+                && S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace)
+                ? S7ValueFormatter.FormatStruct(value, snapshot)
+                : S7ValueText.None;
             var entry = new S7LogEntry
             {
                 Timestamp = DateTimeOffset.UtcNow,
@@ -233,7 +252,12 @@ public sealed partial class S7Client
                 ErrorCode = errorCode,
                 AddressExpression = address,
                 StructTypeName = structType.Name,
-                MappedFieldCount = fieldCount
+                MappedFieldCount = fieldCount,
+                ValueText = valueText.Text,
+                ValueFormat = valueText.Format,
+                ValueState = valueText.Text is null ? S7ValueState.None : S7ValueState.Confirmed,
+                ValueTruncated = valueText.Truncated,
+                ValueItemCount = valueText.ItemCount
             };
             _logger.Log(level, in entry, exception);
             return;
@@ -253,7 +277,11 @@ public sealed partial class S7Client
             AddressExpression = address,
             StructTypeName = structType.Name,
             MappedFieldCount = fieldCount,
-            Cause = exception
+            Cause = exception,
+            StructValue = value,
+            StructSnapshot = snapshot,
+            ValueTraceEnabled = _options.EnableValueTrace,
+            ValueState = valueState
         };
 
         _session.PostFailureLog(in request);

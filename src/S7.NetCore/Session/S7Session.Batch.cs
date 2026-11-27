@@ -81,11 +81,15 @@ internal sealed partial class S7Session
         bool requestIssued = false;
         try
         {
-            TraceFrame("Read", S7OperationStage.Read, frame);
+            TraceFrame("Read", S7OperationStage.Read, frame, S7ProtocolTraceDirection.Tx);
             await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
             requestIssued = true;
             byte[] payload = await S7FrameReader
-                .ReadS7PayloadAsync(transport, S7OperationStage.Read, timeout.Token)
+                .ReadS7PayloadAsync(
+                    transport,
+                    S7OperationStage.Read,
+                    timeout.Token,
+                    CreateFrameObserver("Read", S7OperationStage.Read))
                 .ConfigureAwait(false);
 
             BatchReadRawItem[] raw = S7BatchResponseParser.ParseReadResponse(payload, pduReference, items);
@@ -178,11 +182,15 @@ internal sealed partial class S7Session
 
         try
         {
-            TraceFrame("Write", S7OperationStage.Write, frame);
+            TraceFrame("Write", S7OperationStage.Write, frame, S7ProtocolTraceDirection.Tx);
             await transport.WriteAsync(frame, timeout.Token).ConfigureAwait(false);
             writeIssued = true;
             byte[] payload = await S7FrameReader
-                .ReadS7PayloadAsync(transport, S7OperationStage.Write, timeout.Token)
+                .ReadS7PayloadAsync(
+                    transport,
+                    S7OperationStage.Write,
+                    timeout.Token,
+                    CreateFrameObserver("Write", S7OperationStage.Write))
                 .ConfigureAwait(false);
 
             BatchWriteRawItem[] raw = S7BatchResponseParser.ParseWriteResponse(payload, pduReference, items.Count);

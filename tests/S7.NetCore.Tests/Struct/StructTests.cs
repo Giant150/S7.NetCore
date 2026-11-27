@@ -396,7 +396,10 @@ public sealed class StructTests
     {
         var fake = new FakeTcpTransport();
         var logger = new TestLogger();
-        await using S7Client client = new S7Client(CreateOptions(), logger, fake);
+        await using S7Client client = new S7Client(
+            CreateOptions() with { EnableValueTrace = false },
+            logger,
+            fake);
         await client.ConnectAsync();
 
         var value = new StringStruct

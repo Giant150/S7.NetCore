@@ -35,13 +35,16 @@ internal static class S7FrameReader
     /// <param name="transport">传输通道。</param>
     /// <param name="stage">失败阶段。</param>
     /// <param name="cancellationToken">取消令牌。</param>
+    /// <param name="frameObserver">可选的帧观察回调；每读完一个 TPKT 帧后以整帧只读视图回调。</param>
     /// <returns>S7 净荷。</returns>
     internal static async ValueTask<byte[]> ReadS7PayloadAsync(
         ITcpTransport transport,
         S7OperationStage stage,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        Action<ReadOnlyMemory<byte>>? frameObserver = null)
     {
         byte[] frame = await ReadFrameAsync(transport, stage, cancellationToken).ConfigureAwait(false);
+        NotifyObserver(frameObserver, frame);
         bool isLast = CotpCodec.IsLastDataUnit(frame, stage);
         if (isLast)
         {
@@ -55,11 +58,28 @@ internal static class S7FrameReader
         while (!isLast)
         {
             frame = await ReadFrameAsync(transport, stage, cancellationToken).ConfigureAwait(false);
+            NotifyObserver(frameObserver, frame);
             isLast = CotpCodec.IsLastDataUnit(frame, stage);
             Append(assembled, ref offset, CotpCodec.GetS7Payload(frame, stage), stage);
         }
 
         return assembled.AsSpan(0, offset).ToArray();
+    }
+
+    private static void NotifyObserver(Action<ReadOnlyMemory<byte>>? observer, byte[] frame)
+    {
+        if (observer is null)
+        {
+            return;
+        }
+
+        try
+        {
+            observer(frame);
+        }
+        catch (Exception)
+        {
+        }
     }
 
     private static void Append(byte[] destination, ref int offset, ReadOnlySpan<byte> source, S7OperationStage stage)

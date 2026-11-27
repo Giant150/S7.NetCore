@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using S7.NetCore.Internal;
 
 namespace S7.NetCore;
@@ -13,12 +14,25 @@ public sealed partial class S7Client
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(items);
+        long startTimestamp = Stopwatch.GetTimestamp();
         try
         {
             List<BatchWireItem> wires = BatchRequestValidator.ValidateRead(items);
             ValidateReadCapacity(wires);
             BatchReadRawItem[] raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
-            return BuildReadResult(raw, items.Count);
+            S7BatchReadResult result = BuildReadResult(raw, items.Count);
+            int failures = result.Failures.Count;
+            LogBatchValues(
+                "Read",
+                S7OperationStage.Read,
+                items.Count,
+                items.Count - failures,
+                failures,
+                SumReadBytes(items),
+                Stopwatch.GetElapsedTime(startTimestamp),
+                BuildReadValueEntries(items, result, failures == 0 ? S7LogLevel.Information : S7LogLevel.Warning),
+                S7ValueState.Confirmed);
+            return result;
         }
         catch (S7ClientException exception)
         {
@@ -36,12 +50,25 @@ public sealed partial class S7Client
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(items);
+        long startTimestamp = Stopwatch.GetTimestamp();
         try
         {
             List<BatchWireItem> wires = BatchRequestValidator.ValidateWrite(items);
             ValidateWriteCapacity(wires);
             BatchWriteRawItem[] raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
-            return BuildWriteResult(raw, wires);
+            S7BatchWriteResult result = BuildWriteResult(raw, wires);
+            int failures = result.Failures.Count;
+            LogBatchValues(
+                "Write",
+                S7OperationStage.Write,
+                items.Count,
+                items.Count - failures,
+                failures,
+                SumWireBytes(wires),
+                Stopwatch.GetElapsedTime(startTimestamp),
+                BuildWriteValueEntries(items, result, failures == 0 ? S7LogLevel.Information : S7LogLevel.Warning),
+                failures == 0 ? S7ValueState.Confirmed : S7ValueState.Uncertain);
+            return result;
         }
         catch (S7ClientException exception)
         {
@@ -59,6 +86,7 @@ public sealed partial class S7Client
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(items);
+        long startTimestamp = Stopwatch.GetTimestamp();
         try
         {
             List<BatchTypedReadPlan> plans = BatchRequestValidator.ValidateTypedRead(items);
@@ -66,7 +94,19 @@ public sealed partial class S7Client
             ValidateReadCapacity(wires);
             BatchReadRawItem[] raw = await _session.ReadBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             S7BatchReadResult byteResult = BuildReadResult(raw, plans.Count);
-            return BuildTypedReadResult(plans, raw, byteResult);
+            S7TypedBatchReadResult result = BuildTypedReadResult(plans, raw, byteResult);
+            int failures = result.Failures.Count;
+            LogBatchValues(
+                "Read",
+                S7OperationStage.Read,
+                plans.Count,
+                plans.Count - failures,
+                failures,
+                SumTypedReadBytes(plans),
+                Stopwatch.GetElapsedTime(startTimestamp),
+                BuildTypedReadValueEntries(result, failures == 0 ? S7LogLevel.Information : S7LogLevel.Warning),
+                S7ValueState.Confirmed);
+            return result;
         }
         catch (S7ClientException exception)
         {
@@ -84,14 +124,27 @@ public sealed partial class S7Client
         CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(items);
+        long startTimestamp = Stopwatch.GetTimestamp();
         try
         {
             List<BatchTypedWritePlan> plans = BatchRequestValidator.ValidateTypedWrite(items);
             BatchWireItem[] wires = plans.Select(static plan => plan.Wire).ToArray();
-ValidateWriteCapacity(wires);
+            ValidateWriteCapacity(wires);
             BatchWriteRawItem[] raw = await _session.WriteBatchAsync(wires, cancellationToken).ConfigureAwait(false);
             S7BatchWriteResult byteResult = BuildWriteResult(raw, wires);
-            return BuildTypedWriteResult(plans, raw, byteResult);
+            S7TypedBatchWriteResult result = BuildTypedWriteResult(plans, raw, byteResult);
+            int failures = result.Failures.Count;
+            LogBatchValues(
+                "Write",
+                S7OperationStage.Write,
+                plans.Count,
+                plans.Count - failures,
+                failures,
+                SumTypedWriteBytes(plans),
+                Stopwatch.GetElapsedTime(startTimestamp),
+                BuildTypedWriteValueEntries(items, result, failures == 0 ? S7LogLevel.Information : S7LogLevel.Warning),
+                failures == 0 ? S7ValueState.Confirmed : S7ValueState.Uncertain);
+            return result;
         }
         catch (S7ClientException exception)
         {
@@ -277,9 +330,220 @@ ValidateWriteCapacity(wires);
             FailedItemCount = itemCount,
             SucceededItemCount = 0,
             ErrorCode = exception.ErrorCode,
-            Cause = exception
+            Cause = exception,
+            ValueTraceEnabled = _options.EnableValueTrace,
+            ValueState = S7ValueState.NotSent
         };
 
         _session.PostFailureLog(in request);
+    }
+
+    private void LogBatchValues(
+        string operation,
+        S7OperationStage stage,
+        int itemCount,
+        int succeededItemCount,
+        int failedItemCount,
+        int totalDataBytes,
+        TimeSpan elapsed,
+        S7BatchValueEntry[]? entries,
+        S7ValueState state,
+        S7ErrorCode? errorCode = null)
+    {
+        S7LogLevel level = failedItemCount == 0 ? S7LogLevel.Information : S7LogLevel.Warning;
+        if (!_logger.IsEnabled(level))
+        {
+            return;
+        }
+
+        S7ValueText valueList = entries is { Length: > 0 }
+            ? S7ValueFormatter.FormatBatchItems(entries)
+            : S7ValueText.None;
+        var entry = new S7LogEntry
+        {
+            Timestamp = DateTimeOffset.UtcNow,
+            Operation = operation,
+            Stage = stage,
+            ItemCount = itemCount,
+            SucceededItemCount = succeededItemCount,
+            FailedItemCount = failedItemCount,
+            TotalDataBytes = totalDataBytes,
+            Elapsed = elapsed,
+            Succeeded = failedItemCount == 0,
+            ErrorCode = errorCode,
+            ValueText = valueList.Text,
+            ValueFormat = valueList.Format,
+            ValueState = valueList.Text is null ? S7ValueState.None : state,
+            ValueTruncated = valueList.Truncated,
+            ValueItemCount = valueList.ItemCount
+        };
+
+        _logger.Log(level, in entry);
+    }
+
+    private S7BatchValueEntry[]? BuildReadValueEntries(
+        IReadOnlyList<S7BatchReadItem> items,
+        S7BatchReadResult result,
+        S7LogLevel level)
+    {
+        if (!S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace))
+        {
+            return null;
+        }
+
+        var entries = new S7BatchValueEntry[result.Items.Count];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            S7BatchReadItem request = items[i];
+            S7BatchReadItemResult item = result.Items[i];
+            string address = S7LogAddressFormatter.Format(
+                request.Area,
+                request.DbNumber,
+                request.StartByte,
+                request.Length,
+                dataType: null);
+            string? valueText = item.Succeeded
+                ? S7ValueFormatter.FormatHex(item.Data.Span).Text
+                : null;
+            entries[i] = new S7BatchValueEntry(i, address, valueText, item.ErrorCode);
+        }
+
+        return entries;
+    }
+
+    private S7BatchValueEntry[]? BuildWriteValueEntries(
+        IReadOnlyList<S7BatchWriteItem> items,
+        S7BatchWriteResult result,
+        S7LogLevel level)
+    {
+        if (!S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace))
+        {
+            return null;
+        }
+
+        var entries = new S7BatchValueEntry[result.Items.Count];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            S7BatchWriteItem request = items[i];
+            S7BatchWriteItemResult item = result.Items[i];
+            string address = S7LogAddressFormatter.Format(
+                request.Area,
+                request.DbNumber,
+                request.StartByte,
+                request.Data.Length,
+                dataType: null);
+            string? valueText = item.Succeeded
+                ? S7ValueFormatter.FormatHex(request.Data.Span).Text
+                : null;
+            entries[i] = new S7BatchValueEntry(i, address, valueText, item.ErrorCode);
+        }
+
+        return entries;
+    }
+
+    private S7BatchValueEntry[]? BuildTypedReadValueEntries(
+        S7TypedBatchReadResult result,
+        S7LogLevel level)
+    {
+        if (!S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace))
+        {
+            return null;
+        }
+
+        var entries = new S7BatchValueEntry[result.Items.Count];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            S7TypedReadBatchItemResult item = result.Items[i];
+            string address = ResolveAddressText(item.Address, item.BytesOccupied, item.DataType);
+            string? valueText = item.Succeeded
+                ? S7ValueFormatter.FormatTyped(item.DataType, item.Value).Text
+                : null;
+            entries[i] = new S7BatchValueEntry(i, address, valueText, item.ErrorCode);
+        }
+
+        return entries;
+    }
+
+    private S7BatchValueEntry[]? BuildTypedWriteValueEntries(
+        IReadOnlyList<S7TypedWriteBatchItem> items,
+        S7TypedBatchWriteResult result,
+        S7LogLevel level)
+    {
+        if (!S7LogGate.ShouldWriteValue(_logger, level, _options.EnableValueTrace))
+        {
+            return null;
+        }
+
+        var entries = new S7BatchValueEntry[result.Items.Count];
+        for (int i = 0; i < entries.Length; i++)
+        {
+            S7TypedWriteBatchItem request = items[i];
+            S7TypedWriteBatchItemResult item = result.Items[i];
+            string address = ResolveAddressText(item.Address, request.Value, item.DataType);
+            string? valueText = item.Succeeded
+                ? S7ValueFormatter.FormatTyped(request.DataType, request.Value).Text
+                : null;
+            entries[i] = new S7BatchValueEntry(i, address, valueText, item.ErrorCode);
+        }
+
+        return entries;
+    }
+
+    private static string ResolveAddressText(S7Address address, in S7Value value, S7DataType dataType)
+    {
+        return S7LogAddressFormatter.FormatExpression(address.Expression) is { Length: > 0 } expression
+            ? expression
+            : S7LogAddressFormatter.Format(address.Area, address.DbNumber, address.StartByte, 0, dataType);
+    }
+
+    private static string ResolveAddressText(S7Address address, int length, S7DataType dataType)
+    {
+        return S7LogAddressFormatter.FormatExpression(address.Expression) is { Length: > 0 } expression
+            ? expression
+            : S7LogAddressFormatter.Format(address.Area, address.DbNumber, address.StartByte, length, dataType);
+    }
+
+    private static int SumReadBytes(IReadOnlyList<S7BatchReadItem> items)
+    {
+        int total = 0;
+        foreach (S7BatchReadItem item in items)
+        {
+            total += item.Length;
+        }
+
+        return total;
+    }
+
+    private static int SumWireBytes(IReadOnlyList<BatchWireItem> wires)
+    {
+        int total = 0;
+        foreach (BatchWireItem wire in wires)
+        {
+            total += wire.Length;
+        }
+
+        return total;
+    }
+
+    private static int SumTypedReadBytes(IReadOnlyList<BatchTypedReadPlan> plans)
+    {
+        int total = 0;
+        foreach (BatchTypedReadPlan plan in plans)
+        {
+            total += plan.BytesOccupied;
+        }
+
+        return total;
+    }
+
+    private static int SumTypedWriteBytes(IReadOnlyList<BatchTypedWritePlan> plans)
+    {
+        int total = 0;
+        foreach (BatchTypedWritePlan plan in plans)
+        {
+            total += plan.BytesOccupied;
+        }
+
+        return total;
     }
 }

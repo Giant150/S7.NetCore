@@ -384,7 +384,7 @@ await client.WriteStructAsync("DB2.DBB0", new MotorData
 - 布局非法返回 `StructLayoutInvalid`(139)：空布局、重复/错位标注、容量越界、总长越界、`LayoutKind.Explicit` 或 `FieldOffset`。
 - `[StructLayout(LayoutKind.Sequential/Auto, Pack=...)]` 允许存在，但不参与偏移与长度计算；`LayoutKind.Explicit` 被拒绝。
 - 读取整段一次请求（分包由会话层完成），全有或全无；写入先完成全部字段校验与编码，失败零发送。写入进度语义与字节读写一致，结果不携带重连元数据。
-- 日志只记录类型名、映射字段数、地址、长度、错误码，不记录任何字段值。
+- 日志默认输出结构体单行 JSON 值（字段顺序与声明一致，键为字段名）；关闭 `EnableValueTrace` 后只记录类型名、映射字段数、地址、长度与错误码。
 
 ## 断线自动重连
 
@@ -421,9 +421,18 @@ await using var client = new S7Client(options, logger);
 
 // 仅调试时开启帧级十六进制输出
 var tracedOptions = options with { EnableProtocolTrace = true };
+
+// 需要彻底静默点位值时关闭值展示
+var silentOptions = options with { EnableValueTrace = false };
 ```
 
-默认日志仅记录操作元数据（区域、DB 号、起始地址、长度、耗时、结果），不记录读写数据内容。日志实现抛出异常时会被隔离，不影响主流程。
+默认日志以点位值为重点：`EnableValueTrace` 默认开启，字节读写输出大写无分隔十六进制，类型化读写输出 `类型=值`，结构体读写输出单行 JSON，批量读写输出 `[索引] 地址=值` 逐条列表。值文本上限为 Hex 256 字节、类型化 1024 字符、JSON 4096 字符、批量 32 条；超限会截断并标注。
+
+- `EnableValueTrace = false` 后任何日志与渲染消息都不出现值内容；读写返回值、错误码与时序不变。
+- `EnableProtocolTrace = true` 时逐 TPKT 帧输出 `TX` / `RX` 完整十六进制报文（不截断）并附带帧字节数；关闭时不产生 Trace 条目，也不做报文十六进制转换。两个开关相互独立。
+- 日志条数不做唯一性约束：类型化、结构体、批量内部复用字节读写时，会按实际读写产生多条含值日志。
+- 示例：`S7 Read stage=Read addr=DB1.DBW0 type=Int value=Int=123 result=OK elapsed=1.2ms`。
+- 日志实现抛出异常时会被隔离，不影响主流程。
 
 ## 参数范围
 

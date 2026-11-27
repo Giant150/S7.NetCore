@@ -22,7 +22,7 @@ public enum S7LogLevel
 }
 
 /// <summary>
-/// 结构化日志条目。仅承载操作元数据，不包含读写数据内容。
+/// 结构化日志条目。承载操作元数据；值展示开启时通过值字段承载读写值文本，关闭时值字段为空。
 /// </summary>
 public readonly record struct S7LogEntry
 {
@@ -68,8 +68,17 @@ public readonly record struct S7LogEntry
     /// <summary>协商得到的 PDU 大小；仅连接成功日志使用。</summary>
     public int? NegotiatedPduSize { get; init; }
 
-    /// <summary>帧级十六进制跟踪内容；仅在显式开启协议跟踪时填充。</summary>
+    /// <summary>
+    /// 帧级十六进制跟踪内容；仅在显式开启协议跟踪时填充。
+    /// 仅承载单帧完整十六进制报文，不套用值文本截断上限。
+    /// </summary>
     public string? ProtocolTrace { get; init; }
+
+    /// <summary>协议帧方向；非协议帧条目为 <see cref="S7ProtocolTraceDirection.None"/>。</summary>
+    public S7ProtocolTraceDirection ProtocolTraceDirection { get; init; }
+
+    /// <summary>协议帧字节数；非协议帧条目为 <see langword="null"/>。</summary>
+    public int? ProtocolTraceBytes { get; init; }
 
     /// <summary>裁剪后的地址表达式；仅类型化读写条目填充。</summary>
     public string? AddressExpression { get; init; }
@@ -124,6 +133,21 @@ public readonly record struct S7LogEntry
 
     /// <summary>条目数超限时的协议上限；仅批量超限日志填充。</summary>
     public int? ItemCountLimit { get; init; }
+
+    /// <summary>值文本；值展示关闭、读取失败或值不适用时为 <see langword="null"/>。</summary>
+    public string? ValueText { get; init; }
+
+    /// <summary>值格式；默认 <see cref="S7ValueFormat.None"/>。</summary>
+    public S7ValueFormat ValueFormat { get; init; }
+
+    /// <summary>值状态；默认 <see cref="S7ValueState.None"/>（不适用）。</summary>
+    public S7ValueState ValueState { get; init; }
+
+    /// <summary>值文本是否被截断；默认 <see langword="false"/>。</summary>
+    public bool ValueTruncated { get; init; }
+
+    /// <summary>批量日志实际展示的逐条值条数；非批量条目为 <see langword="null"/>。</summary>
+    public int? ValueItemCount { get; init; }
 }
 
 /// <summary>
@@ -142,7 +166,7 @@ public interface IS7Logger
     /// 写入一条结构化日志。
     /// </summary>
     /// <param name="level">日志级别。</param>
-    /// <param name="entry">日志条目，仅包含元数据。</param>
+    /// <param name="entry">日志条目；值展示开启时包含值文本。</param>
     /// <param name="exception">关联异常（如有）。</param>
     void Log(S7LogLevel level, in S7LogEntry entry, Exception? exception = null);
 }
