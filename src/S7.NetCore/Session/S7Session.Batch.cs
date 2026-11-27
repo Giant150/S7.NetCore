@@ -68,8 +68,6 @@ internal sealed partial class S7Session
             .ConfigureAwait(false);
         await EnsureConnectedAsync(S7OperationStage.Read, cancellationToken).ConfigureAwait(false);
         ITcpTransport transport = _transport!;
-        await DrainPendingAsync(transport, Volatile.Read(ref _connectionEpoch), cancellationToken)
-            .ConfigureAwait(false);
         ThrowIfCannotSend(S7OperationStage.Read, cancellationToken);
         BatchCapacityCalculator.ValidateRead(items, NegotiatedPduSize);
 
@@ -99,30 +97,36 @@ internal sealed partial class S7Session
         catch (OperationCanceledException ex)
         {
             long judgedAt = Stopwatch.GetTimestamp();
-            if (requestIssued)
-            {
-                PostAftercare(transport, pduReference, S7OperationStage.Read);
-            }
-
             S7ClientException mapped = MapCanceled(
                 timeout,
                 S7OperationStage.Read,
                 S7ErrorCode.ReadTimeout,
                 DescribeBatch("读取", items),
                 ex);
+            TimeSpan judgmentElapsed = Stopwatch.GetElapsedTime(judgedAt);
+            DrainAttempt attempt = await DrainOnFailureAsync(
+                    transport,
+                    pduReference,
+                    S7OperationStage.Read,
+                    requestIssued)
+                .ConfigureAwait(false);
+            S7ClientException finalError = attempt.Outcome == LateResponseDrainOutcome.Faulted
+                ? CreateSessionFaultedException(mapped)
+                : mapped;
             LogBatchFailure(
                 scope,
                 "Read",
                 S7OperationStage.Read,
                 items,
-                mapped,
+                finalError,
                 CreateCancelDecision(
                     timeout,
                     requestIssued,
-                    Stopwatch.GetElapsedTime(judgedAt),
+                    in attempt,
+                    judgmentElapsed,
                     DescribeBatch("读取", items)),
                 requestIssued);
-            throw mapped;
+            throw finalError;
         }
         catch (TransportException ex)
         {
@@ -169,8 +173,6 @@ internal sealed partial class S7Session
             .ConfigureAwait(false);
         await EnsureConnectedAsync(S7OperationStage.Write, cancellationToken).ConfigureAwait(false);
         ITcpTransport transport = _transport!;
-        await DrainPendingAsync(transport, Volatile.Read(ref _connectionEpoch), cancellationToken)
-            .ConfigureAwait(false);
         ThrowIfCannotSend(S7OperationStage.Write, cancellationToken);
         BatchCapacityCalculator.ValidateWrite(items, NegotiatedPduSize);
 
@@ -200,11 +202,6 @@ internal sealed partial class S7Session
         catch (OperationCanceledException ex)
         {
             long judgedAt = Stopwatch.GetTimestamp();
-            if (writeIssued)
-            {
-                PostAftercare(transport, pduReference, S7OperationStage.Write);
-            }
-
             S7ClientException mapped = MapCanceled(
                 timeout,
                 S7OperationStage.Write,
@@ -212,20 +209,31 @@ internal sealed partial class S7Session
                 DescribeBatch("写入", items),
                 ex,
                 writeOutcomeUncertain: writeIssued);
+            TimeSpan judgmentElapsed = Stopwatch.GetElapsedTime(judgedAt);
+            DrainAttempt attempt = await DrainOnFailureAsync(
+                    transport,
+                    pduReference,
+                    S7OperationStage.Write,
+                    writeIssued)
+                .ConfigureAwait(false);
+            S7ClientException finalError = attempt.Outcome == LateResponseDrainOutcome.Faulted
+                ? CreateSessionFaultedException(mapped)
+                : mapped;
             LogBatchFailure(
                 scope,
                 "Write",
                 S7OperationStage.Write,
                 items,
-                mapped,
+                finalError,
                 CreateCancelDecision(
                     timeout,
                     writeIssued,
-                    Stopwatch.GetElapsedTime(judgedAt),
+                    in attempt,
+                    judgmentElapsed,
                     DescribeBatch("写入", items),
                     writeOutcomeUncertain: writeIssued),
                 writeIssued);
-            throw mapped;
+            throw finalError;
         }
         catch (TransportException ex)
         {

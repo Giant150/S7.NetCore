@@ -14,10 +14,13 @@ internal sealed class FakeTcpTransport : ITcpTransport
     private volatile bool _open;
     private int _requestsSinceConnect;
     private int _failureConsumed;
+    private int _readCount;
 
     public List<byte[]> ReceivedFrames { get; } = [];
 
     internal int WriteCount => ReceivedFrames.Count;
+
+    public int ReadCount => Volatile.Read(ref _readCount);
 
     public int ConnectedCount { get; private set; }
 
@@ -120,6 +123,7 @@ internal sealed class FakeTcpTransport : ITcpTransport
 
                     _current.AsSpan(_currentOffset, count).CopyTo(buffer.Span);
                     _currentOffset += count;
+                    Interlocked.Increment(ref _readCount);
                     return count;
                 }
 

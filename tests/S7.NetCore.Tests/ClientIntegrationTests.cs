@@ -451,7 +451,7 @@ public sealed class ClientIntegrationTests
         cancellationSource.Cancel();
 
         S7ClientException firstError = await Assert.ThrowsAsync<S7ClientException>(() => first);
-        Assert.Equal(S7ErrorCode.OperationCancelled, firstError.ErrorCode);
+        Assert.Equal(S7ErrorCode.SessionFaulted, firstError.ErrorCode);
 
         S7ClientException secondError = await Assert.ThrowsAsync<S7ClientException>(() => second);
         Assert.Equal(S7ErrorCode.OperationCancelled, secondError.ErrorCode);

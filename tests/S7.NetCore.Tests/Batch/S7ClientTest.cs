@@ -393,7 +393,7 @@ public sealed class S7ClientTest
     }
 
     [Fact]
-    public async Task ReadBatchAsync_Timeout_ThrowsReadTimeoutAndKeepsSession()
+    public async Task ReadBatchAsync_Timeout_DrainFails_Returns202AndFaulted()
     {
         var simulator = new BatchPlcSimulator { SuppressReadResponses = true };
 
@@ -403,15 +403,16 @@ public sealed class S7ClientTest
         S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(
             () => client.ReadBatchAsync([new S7BatchReadItem(S7Area.DataBlock, 1, 0, 1)]));
 
-        Assert.Equal(S7ErrorCode.ReadTimeout, error.ErrorCode);
-        Assert.Equal(S7ErrorCategory.Timeout, error.Category);
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
         Assert.Equal(S7OperationStage.Read, error.Stage);
         Assert.False(error.WriteOutcomeUncertain);
-        Assert.True(client.IsConnected);
+        Assert.Empty(error.BatchFailedItems);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.False(client.IsConnected);
     }
 
     [Fact]
-    public async Task WriteBatchAsync_TimeoutAfterSend_MarksOutcomeUncertain()
+    public async Task WriteBatchAsync_Timeout_DrainFails_Returns202AndUncertain()
     {
         var simulator = new BatchPlcSimulator { SuppressWriteResponses = true };
 
@@ -421,12 +422,12 @@ public sealed class S7ClientTest
         S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(
             () => client.WriteBatchAsync([new S7BatchWriteItem(S7Area.DataBlock, 1, 0, new byte[] { 0x01 })]));
 
-        Assert.Equal(S7ErrorCode.WriteTimeout, error.ErrorCode);
-        Assert.Equal(S7ErrorCategory.Timeout, error.Category);
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
         Assert.Equal(S7OperationStage.Write, error.Stage);
         Assert.True(error.WriteOutcomeUncertain);
         Assert.Equal(1, simulator.WriteFrameCount);
-        Assert.True(client.IsConnected);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.False(client.IsConnected);
     }
 
     [Fact]

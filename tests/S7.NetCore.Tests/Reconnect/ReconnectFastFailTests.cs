@@ -381,7 +381,7 @@ public sealed class ReconnectFastFailTests
     }
 
     [Fact]
-    public async Task Timeout_StillKeepsConnected_Not204()
+    public async Task Timeout_DrainFails_Returns202_Not204()
     {
         var fake = new FakeTcpTransport();
         await using S7Client client = new S7Client(
@@ -397,9 +397,9 @@ public sealed class ReconnectFastFailTests
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
             client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
 
-        Assert.Equal(S7ErrorCode.ReadTimeout, exception.ErrorCode);
-        Assert.Equal(S7ErrorCategory.Timeout, exception.Category);
-        Assert.Equal(S7SessionState.Connected, client.State);
+        Assert.Equal(S7ErrorCode.SessionFaulted, exception.ErrorCode);
+        Assert.NotEqual(S7ErrorCode.SessionReconnecting, exception.ErrorCode);
+        Assert.Equal(S7SessionState.Faulted, client.State);
         Assert.Equal(1, fake.ConnectedCount);
     }
 

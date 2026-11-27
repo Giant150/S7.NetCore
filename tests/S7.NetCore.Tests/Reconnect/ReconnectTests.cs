@@ -386,7 +386,7 @@ public sealed class ReconnectTests
     [Theory]
     [InlineData(true)]
     [InlineData(false)]
-    public async Task WriteTimeout_KeepsConnected_IndependentOfSwitch(bool autoReconnectEnabled)
+    public async Task WriteTimeout_DrainFails_Returns202IndependentOfSwitch(bool autoReconnectEnabled)
     {
         var fake = new FakeTcpTransport();
         await using S7Client client = new S7Client(
@@ -401,10 +401,9 @@ public sealed class ReconnectTests
         S7ClientException exception = await Assert.ThrowsAsync<S7ClientException>(() =>
             client.WriteBytesAsync(new S7WriteRequest(S7Area.DataBlock, 1, 0, new byte[] { 1 })));
 
-        Assert.Equal(S7ErrorCode.WriteTimeout, exception.ErrorCode);
-        Assert.Equal(S7ErrorCategory.Timeout, exception.Category);
+        Assert.Equal(S7ErrorCode.SessionFaulted, exception.ErrorCode);
         Assert.True(exception.WriteOutcomeUncertain);
-        Assert.Equal(S7SessionState.Connected, client.State);
+        Assert.Equal(S7SessionState.Faulted, client.State);
         Assert.Equal(1, fake.ConnectedCount);
     }
 

@@ -7,36 +7,9 @@ namespace S7.NetCore.Tests.Reconnect;
 public sealed class ReconnectFastFailSingleTests
 {
     [Fact]
-    public void AftercareQueue_PostTakeClear()
+    public async Task ReadTimeout_DrainSuccess_Returns601()
     {
-        var queue = new AftercareQueue();
-        var fake = new FakeTcpTransport();
-        var pending = new PendingLateResponse(
-            fake,
-            pduReference: 7,
-            S7OperationStage.Read,
-            TimeSpan.FromSeconds(1),
-            connectionEpoch: 3);
-
-        queue.Post(in pending);
-        Assert.Equal(1, queue.Count);
-        Assert.True(queue.TryTake(out PendingLateResponse taken));
-        Assert.Same(fake, taken.Transport);
-        Assert.Equal((ushort)7, taken.PduReference);
-        Assert.Equal(S7OperationStage.Read, taken.Stage);
-        Assert.Equal(TimeSpan.FromSeconds(1), taken.DrainTimeout);
-        Assert.Equal(3, taken.ConnectionEpoch);
-        Assert.False(queue.TryTake(out _));
-
-        queue.Post(in pending);
-        queue.Clear();
-        Assert.Equal(0, queue.Count);
-    }
-
-    [Fact]
-    public async Task ReadTimeout_Returns601_NoDrainWait()
-    {
-        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromSeconds(3) };
+        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromMilliseconds(1200) };
         await using S7Client client = new S7Client(
             CreateOptions(readTimeout: TimeSpan.FromSeconds(1)),
             null,
@@ -51,7 +24,7 @@ public sealed class ReconnectFastFailSingleTests
 
         Assert.Equal(S7ErrorCode.ReadTimeout, error.ErrorCode);
         Assert.Equal(S7ErrorCategory.Timeout, error.Category);
-        Assert.True(elapsed < TimeSpan.FromMilliseconds(1600), $"超时返回耗时 {elapsed.TotalMilliseconds} ms。");
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2000), $"超时返回耗时 {elapsed.TotalMilliseconds} ms。");
         Assert.Equal(S7SessionState.Connected, client.State);
         Assert.Equal(1, fake.ConnectedCount);
     }
@@ -82,7 +55,7 @@ public sealed class ReconnectFastFailSingleTests
     }
 
     [Fact]
-    public async Task Timeout_DeferredDrain_ThenFaulted202()
+    public async Task ReadTimeout_DrainFails_Returns202AndFaulted()
     {
         var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromSeconds(10) };
         await using S7Client client = new S7Client(
@@ -92,22 +65,21 @@ public sealed class ReconnectFastFailSingleTests
             () => fake);
         await client.ConnectAsync();
 
-        S7ClientException timeout = await Assert.ThrowsAsync<S7ClientException>(() =>
+        long start = Stopwatch.GetTimestamp();
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() =>
             client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
-        Assert.Equal(S7ErrorCode.ReadTimeout, timeout.ErrorCode);
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
 
-        S7ClientException faulted = await Assert.ThrowsAsync<S7ClientException>(() =>
-            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
-
-        Assert.Equal(S7ErrorCode.SessionFaulted, faulted.ErrorCode);
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
         Assert.Equal(S7SessionState.Faulted, client.State);
         Assert.Equal(1, fake.ConnectedCount);
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2600), $"排空失败返回耗时 {elapsed.TotalMilliseconds} ms。");
     }
 
     [Fact]
-    public async Task CancelAfterSend_Returns603_NoDrainWait()
+    public async Task CancelAfterSend_DrainSuccess_Returns603()
     {
-        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromSeconds(3) };
+        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromSeconds(1) };
         await using S7Client client = new S7Client(
             CreateOptions(readTimeout: TimeSpan.FromSeconds(10)),
             null,
@@ -128,7 +100,201 @@ public sealed class ReconnectFastFailSingleTests
 
         Assert.Equal(S7ErrorCode.OperationCancelled, error.ErrorCode);
         Assert.Equal(S7ErrorCategory.Cancelled, error.Category);
-        Assert.True(elapsed < TimeSpan.FromMilliseconds(500), $"取消返回耗时 {elapsed.TotalMilliseconds} ms。");
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2500), $"取消返回耗时 {elapsed.TotalMilliseconds} ms。");
+        Assert.Equal(S7SessionState.Connected, client.State);
+    }
+
+    [Fact]
+    public async Task Cancel_DrainFails_Returns202Not603()
+    {
+        var fake = new FakeTcpTransport();
+        fake.RequestInterceptor = request => request.Length > 17 && request[17] == 0x04
+            ? null
+            : fake.DefaultResponseForTest(request);
+        await using S7Client client = new S7Client(
+            CreateOptions(readTimeout: TimeSpan.FromSeconds(10)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        using var cancellation = new CancellationTokenSource();
+        Task<ReadOnlyMemory<byte>> read = client.ReadBytesAsync(
+            new S7ReadRequest(S7Area.DataBlock, 1, 0, 4),
+            cancellation.Token);
+        await WaitUntilAsync(() => fake.WriteCount >= 3);
+
+        long start = Stopwatch.GetTimestamp();
+        cancellation.Cancel();
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() => read);
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2600), $"取消排空失败耗时 {elapsed.TotalMilliseconds} ms。");
+    }
+
+    [Fact]
+    public async Task WriteTimeout_DrainFails_202KeepsWriteProgress()
+    {
+        var fake = new FakeTcpTransport();
+        int writeRequests = 0;
+        fake.RequestInterceptor = request =>
+        {
+            if (request.Length > 17 && request[17] == 0x05)
+            {
+                writeRequests++;
+                if (writeRequests >= 2)
+                {
+                    return null;
+                }
+            }
+
+            return fake.DefaultResponseForTest(request);
+        };
+
+        await using S7Client client = new S7Client(
+            CreateOptions(writeTimeout: TimeSpan.FromSeconds(1)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        var payload = new byte[1000];
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.WriteBytesAsync(new S7WriteRequest(S7Area.DataBlock, 1, 0, payload)));
+
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
+        Assert.True(error.WriteOutcomeUncertain);
+        Assert.True(error.BytesWritten > 0, $"已写字节数 {error.BytesWritten}。");
+        Assert.True(error.BytesWritten < payload.Length, $"已写字节数 {error.BytesWritten}。");
+        Assert.NotNull(error.WrittenRange);
+        Assert.Equal(0, error.WrittenRange!.Value.StartByte);
+        Assert.Equal(error.BytesWritten, error.WrittenRange.Value.Length);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+    }
+
+    [Fact]
+    public async Task Drain_DuringDisconnect_ReturnsOriginalError()
+    {
+        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromSeconds(10) };
+        await using S7Client client = new S7Client(
+            CreateOptions(readTimeout: TimeSpan.FromSeconds(1)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        Task<ReadOnlyMemory<byte>> read = client.ReadBytesAsync(
+            new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
+        await Task.Delay(1100);
+
+        long start = Stopwatch.GetTimestamp();
+        await client.DisconnectAsync(CancellationToken.None);
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() => read);
+        Assert.Equal(S7ErrorCode.ReadTimeout, error.ErrorCode);
+        Assert.NotEqual(S7ErrorCode.SessionFaulted, error.ErrorCode);
+        Assert.Equal(S7SessionState.Disconnected, client.State);
+        Assert.True(elapsed < TimeSpan.FromSeconds(1), $"断开释放耗时 {elapsed.TotalMilliseconds} ms。");
+    }
+
+    [Fact]
+    public async Task Drain_RejectsMismatchedResponseType()
+    {
+        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromMilliseconds(1200) };
+        fake.RequestInterceptor = request =>
+        {
+            if (request.Length > 17 && request[17] == 0x04)
+            {
+                byte[]? response = fake.DefaultResponseForTest(request);
+                if (response is not null)
+                {
+                    response[19] = 0x05;
+                }
+
+                return response;
+            }
+
+            return fake.DefaultResponseForTest(request);
+        };
+
+        await using S7Client client = new S7Client(
+            CreateOptions(readTimeout: TimeSpan.FromSeconds(1)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        long start = Stopwatch.GetTimestamp();
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+        TimeSpan elapsed = Stopwatch.GetElapsedTime(start);
+
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2600), $"排空失败返回耗时 {elapsed.TotalMilliseconds} ms。");
+    }
+
+    [Fact]
+    public async Task FailureDrain_NoReconnectStarted()
+    {
+        var fake = new FakeTcpTransport();
+        fake.RequestInterceptor = request => request.Length > 17 && request[17] == 0x04
+            ? null
+            : fake.DefaultResponseForTest(request);
+        await using S7Client client = new S7Client(
+            CreateOptions(readTimeout: TimeSpan.FromSeconds(1)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        S7ClientException error = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+
+        Assert.Equal(S7ErrorCode.SessionFaulted, error.ErrorCode);
+        Assert.Equal(S7SessionState.Faulted, client.State);
+        Assert.Equal(1, fake.ConnectedCount);
+
+        S7ClientException again = await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+
+        Assert.Equal(S7ErrorCode.SessionFaulted, again.ErrorCode);
+        Assert.Equal(1, fake.ConnectedCount);
+    }
+
+    [Fact]
+    public async Task SendPath_HasNoPreDrain()
+    {
+        var fake = new FakeTcpTransport { ReadResponseDelay = TimeSpan.FromMilliseconds(1200) };
+        await using S7Client client = new S7Client(
+            CreateOptions(readTimeout: TimeSpan.FromSeconds(1)),
+            null,
+            fake,
+            () => fake);
+        await client.ConnectAsync();
+
+        await Assert.ThrowsAsync<S7ClientException>(() =>
+            client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4)));
+
+        int readCountBefore = fake.ReadCount;
+        int readsAtSecondWrite = -1;
+        fake.RequestInterceptor = request =>
+        {
+            if (request.Length > 17 && request[17] == 0x04)
+            {
+                readsAtSecondWrite = fake.ReadCount;
+            }
+
+            return fake.DefaultResponseForTest(request);
+        };
+        fake.ReadResponseDelay = TimeSpan.Zero;
+
+        _ = await client.ReadBytesAsync(new S7ReadRequest(S7Area.DataBlock, 1, 0, 4));
+
+        Assert.Equal(readCountBefore, readsAtSecondWrite);
     }
 
     [Fact]
@@ -174,14 +340,14 @@ public sealed class ReconnectFastFailSingleTests
     }
 
     [Fact]
-    public async Task BatchWriteTimeout_Returns602_NoDrainWait()
+    public async Task BatchWriteTimeout_DrainSuccess_Returns602()
     {
         var fake = new FakeTcpTransport();
         await using S7Session session = CreateSession(
             fake,
             CreateOptions(writeTimeout: TimeSpan.FromSeconds(1)));
         await session.ConnectAsync(CancellationToken.None);
-        fake.WriteResponseDelay = TimeSpan.FromSeconds(3);
+        fake.WriteResponseDelay = TimeSpan.FromMilliseconds(1300);
 
         BatchWireItem[] items =
         [
@@ -195,7 +361,8 @@ public sealed class ReconnectFastFailSingleTests
 
         Assert.Equal(S7ErrorCode.WriteTimeout, error.ErrorCode);
         Assert.True(error.WriteOutcomeUncertain);
-        Assert.True(elapsed < TimeSpan.FromMilliseconds(1600), $"批量写超时返回耗时 {elapsed.TotalMilliseconds} ms。");
+        Assert.True(elapsed < TimeSpan.FromMilliseconds(2000), $"批量写超时返回耗时 {elapsed.TotalMilliseconds} ms。");
+        Assert.Equal(S7SessionState.Connected, session.State);
     }
 
     [Fact]
@@ -265,7 +432,7 @@ public sealed class ReconnectFastFailSingleTests
         Exception? cause = logger.SnapshotCauses().FirstOrDefault(static item => item is ReconnectDecisionInfo);
         ReconnectDecisionInfo? decision = Assert.IsType<ReconnectDecisionInfo>(cause);
         Assert.Contains("未重试、未退避", decision.Reason);
-        Assert.Contains("善后已延后", decision.Reason);
+        Assert.DoesNotContain("延后", decision.Reason);
         Assert.Contains("判定耗时", decision.Message);
     }
 
